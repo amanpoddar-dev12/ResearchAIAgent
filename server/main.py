@@ -1,0 +1,69 @@
+import os
+import logging
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+
+from .api.models import ResearchRequest, ResearchStarted
+from .api.research import get_public_state, jobs, start_research, stream_research
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    settings = __import__("app.config", fromlist=["Settings"]).Settings()
+    try:
+        settings.validate_configuration()
+    except ValueError as exc:
+        logging.getLogger(__name__).warning("Configuration incomplete: %s", exc)
+    yield
+
+
+app = FastAPI(title="AI Research Agent API", lifespan=lifespan)
+origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://localhost:5174",
+    ).split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/api/health")
+async def health() -> dict[str, str]:
+    settings = __import__("app.config", fromlist=["Settings"]).Settings()
+    return {
+        "status": "ok",
+        "llm_provider": "gemini",
+        "model": settings.gemini_model,
+        "tavily_configured": str(bool(settings.tavily_api_key)).lower(),
+    }
+
+
+@app.post("/api/research", response_model=ResearchStarted)
+async def create_research(request: ResearchRequest) -> ResearchStarted:
+    return ResearchStarted(research_id=await start_research(request))
+
+
+@app.get("/api/research/{research_id}/stream")
+async def research_stream(research_id: str) -> StreamingResponse:
+    if research_id not in jobs:
+        raise HTTPException(status_code=404, detail="Research session not found")
+    return StreamingResponse(stream_research(research_id), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive"})
+
+
+@app.get("/api/research/{research_id}")
+async def research_result(research_id: str) -> dict:
+    result = get_public_state(research_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Research result not found")
+    return result

@@ -1,0 +1,3 @@
+import { TriangleAlert } from "lucide-react";
+import type { Conflict } from "../types/research";
+export function ConflictCard({ conflict }: { conflict: Conflict }) { return <article className="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/70 dark:bg-amber-950/20"><div className="flex gap-3"><TriangleAlert className="shrink-0 text-amber-600" size={18} /><div><h3 className="font-medium text-amber-900 dark:text-amber-200">{conflict.topic}</h3><p className="mt-2 text-sm leading-6 text-amber-800/80 dark:text-amber-300/80">{conflict.explanation}</p><div className="mt-3 grid gap-2 text-xs text-amber-900/80 sm:grid-cols-2"><div><b>Source A:</b> {conflict.claim_a}</div><div><b>Source B:</b> {conflict.claim_b}</div></div></div></div></article>; }
