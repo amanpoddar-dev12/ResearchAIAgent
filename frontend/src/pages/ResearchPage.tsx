@@ -29,7 +29,7 @@ export function ResearchPage() {
               <div className="rounded-2xl border border-indigo-100 bg-indigo-50/80 p-4 text-sm dark:border-indigo-900 dark:bg-indigo-950/30">
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2"><span><b>Provider:</b> Gemini</span>{usage && <><span className="min-w-0 max-w-full truncate"><b>Model:</b> {usage.llm_model}</span><span><b>Searches:</b> {usage.searches_performed} / {usage.max_searches}</span><span><b>LLM:</b> {usage.llm_requests_used} / {usage.max_llm_requests}</span><span><b>Sources:</b> {usage.sources.length} / {usage.max_sources}</span></>}</div>
               </div>
-              <ResearchProgress events={events} />
+              <ResearchProgress events={events} status={status} hasReport={Boolean(report)} />
               {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"><b>Research failed.</b> {error}<button onClick={run} className="ml-3 underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500">Retry</button></div>}
               {findings.length > 0 && <section><h2 className="mb-3 text-lg font-semibold">Findings</h2><div className="grid gap-4">{findings.map((finding, i) => <FindingCard key={`${finding.claim}-${i}`} finding={finding} />)}</div></section>}
               {conflicts.length > 0 && <section><h2 className="mb-3 text-lg font-semibold">Conflicting information</h2><div className="space-y-3">{conflicts.map((conflict, i) => <ConflictCard key={`${conflict.topic}-${i}`} conflict={conflict} />)}</div></section>}
@@ -38,6 +38,10 @@ export function ResearchPage() {
             <aside className="min-w-0 space-y-6 lg:sticky lg:top-6 lg:self-start"><ActivityLog events={events} /><SourceList sources={sources} /></aside>
           </div>
         )}
+        <footer className="mx-auto mt-12 max-w-3xl border-t border-slate-200/80 py-8 text-center dark:border-slate-800">
+          <h2 className="text-sm font-semibold">About the Developer</h2>
+          <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">Research AI Agent is developed by <strong className="text-slate-700 dark:text-slate-300">Aman Poddar</strong>, a Software Engineer building practical tools for clear, evidence-based research.</p>
+        </footer>
       </main>
     </div>
   );
