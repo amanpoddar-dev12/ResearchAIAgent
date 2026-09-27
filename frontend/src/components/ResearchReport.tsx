@@ -20,7 +20,7 @@ export function ResearchReport({ markdown }: { markdown: string }) {
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1800);
   };
-  return <section className="report-wrapper overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+  return <section className="report-wrapper min-w-0 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
     <header className="border-b border-slate-100 bg-gradient-to-br from-indigo-50 via-white to-white px-6 py-6 dark:border-slate-800 dark:from-indigo-950/40 dark:via-slate-900 dark:to-slate-900 sm:px-8">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex min-w-0 items-start gap-3">

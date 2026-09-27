@@ -25,7 +25,7 @@ export function ResearchPage() {
         <ResearchInput value={question} setValue={setQuestion} depth={depth} setDepth={setDepth} maxSources={maxSources} setMaxSources={setMaxSources} disabled={status === "researching"} onSubmit={run} />
         {status === "idle" ? <EmptyState /> : (
           <div className="mt-10 grid min-w-0 gap-6 sm:mt-12 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
-            <div className="space-y-6">
+            <div className="min-w-0 space-y-6">
               <div className="rounded-2xl border border-indigo-100 bg-indigo-50/80 p-4 text-sm dark:border-indigo-900 dark:bg-indigo-950/30">
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2"><span><b>Provider:</b> Gemini</span>{usage && <><span className="min-w-0 max-w-full truncate"><b>Model:</b> {usage.llm_model}</span><span><b>Searches:</b> {usage.searches_performed} / {usage.max_searches}</span><span><b>LLM:</b> {usage.llm_requests_used} / {usage.max_llm_requests}</span><span><b>Sources:</b> {usage.sources.length} / {usage.max_sources}</span></>}</div>
               </div>

@@ -45,10 +45,22 @@
 }
 
 @media (max-width: 640px) {
+  .report-wrapper header { @apply px-3 py-4; }
+  .report-wrapper header > div { @apply gap-2; }
+  .report-wrapper header h2 { @apply text-lg leading-6; }
+  .report-wrapper header p { @apply text-[11px]; }
+  .report-wrapper header .icon-button { @apply p-1.5; }
+  .report-content { @apply px-3 py-4 text-[13px]; line-height: 1.55; }
   .report-content h1 { @apply text-xl; }
-  .report-content h2 { @apply mt-7 text-lg; }
-  .report-content h3 { @apply mt-5 text-sm; }
-  .report-content p, .report-content li { @apply text-sm leading-6; }
+  .report-content h2 { @apply mt-6 text-base leading-6; }
+  .report-content h3 { @apply mt-4 text-sm leading-5; }
+  .report-content p, .report-content li { @apply text-[13px] leading-5; }
+  .report-content ul, .report-content ol { @apply my-3 space-y-1; }
+  .report-content blockquote { @apply my-3 px-3 py-2; }
+  .report-content pre { @apply my-3 p-3 text-[12px]; }
+  .report-table-wrap { @apply my-3; }
+  .report-content table { min-width: 36rem; font-size: 12px; }
+  .report-content th, .report-content td { @apply px-2 py-1.5; }
 }
 
 @media print {
