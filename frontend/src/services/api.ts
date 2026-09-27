@@ -1,6 +1,6 @@
 import type { ResearchEvent, ResearchRequest } from "../types/research";
 
-const API_URL = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
+const API_URL = (import.meta.env.VITE_API_URL || import.meta.env.VITE_BACKEND_URL || "").replace(/\/$/, "");
 const backendHint = import.meta.env.VITE_BACKEND_URL || "the configured FastAPI port";
 
 async function apiRequest(url: string, init?: RequestInit): Promise<Response> {
