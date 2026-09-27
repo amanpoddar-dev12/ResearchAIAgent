@@ -19,14 +19,14 @@ export function ResearchPage() {
   const run = async () => { if (!question.trim() || status === "researching") return; reset(); setQuestion(question); setStatus("researching"); try { const id = await startResearch({ question, depth, max_sources: maxSources }); const stop = streamResearch(id, (event) => { setEvents((old) => [...old, event]); if (event.type === "source_found") setSources((old) => [...old, event.data as ResearchSource]); if (event.type === "finding_extracted") setFindings((old) => [...old, event.data as Finding]); if (event.type === "conflict_detected") setConflicts((old) => [...old, event.data as Conflict]); if (event.type === "complete") { const payload = event.data as { state: ResearchState; report: string }; setUsage(payload.state); setReport(payload.report); setStatus("completed"); } if (event.type === "research_failed") { setError(event.message); setStatus("error"); } }, (err) => { setError(err.message); setStatus("error"); }); setCleanup(() => stop); } catch (err) { setError(err instanceof Error ? err.message : "Could not start research."); setStatus("error"); } };
   const toggleTheme = () => { const next = !dark; setDark(next); document.documentElement.classList.toggle("dark", next); localStorage.setItem("theme", next ? "dark" : "light"); };
   return (
-    <div className="min-h-screen">
+    <div className="app-shell min-h-screen">
       <Header dark={dark} onTheme={toggleTheme} onNew={reset} />
       <main id="main-content" className="mx-auto max-w-7xl overflow-x-hidden px-4 py-8 sm:px-6 sm:py-10 lg:px-8 lg:py-12">
         <ResearchInput value={question} setValue={setQuestion} depth={depth} setDepth={setDepth} maxSources={maxSources} setMaxSources={setMaxSources} disabled={status === "researching"} onSubmit={run} />
         {status === "idle" ? <EmptyState /> : (
           <div className="mt-10 grid min-w-0 gap-6 sm:mt-12 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
             <div className="space-y-6">
-              <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-4 text-sm dark:border-indigo-900 dark:bg-indigo-950/30">
+              <div className="rounded-2xl border border-indigo-100 bg-indigo-50/80 p-4 text-sm dark:border-indigo-900 dark:bg-indigo-950/30">
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2"><span><b>Provider:</b> Gemini</span>{usage && <><span className="min-w-0 max-w-full truncate"><b>Model:</b> {usage.llm_model}</span><span><b>Searches:</b> {usage.searches_performed} / {usage.max_searches}</span><span><b>LLM:</b> {usage.llm_requests_used} / {usage.max_llm_requests}</span><span><b>Sources:</b> {usage.sources.length} / {usage.max_sources}</span></>}</div>
               </div>
               <ResearchProgress events={events} />
