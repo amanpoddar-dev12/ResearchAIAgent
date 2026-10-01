@@ -23,7 +23,14 @@ Every source_id must exactly match one of the supplied source IDs.
 Question: {question}
 Sources:
 {sources}
-Return JSON with a "findings" array.
+Return JSON with "findings" and "evidence" arrays. Each finding has a unique id,
+evidence_ids pointing to evidence records, and source_ids. Each evidence record has
+a unique id, one source_id, a verbatim excerpt copied from that source, relation
+(supports, contradicts, context), and strength (direct, partial). Do not paraphrase
+excerpts. Look for contradictory evidence too. Do not decide evidence_status;
+the application derives it. In Fact Check mode use the exact supplied target claim
+text, including when the evidence contradicts it. In Compare mode set comparison_item
+to an exact supplied item and comparison_criterion to a shared criterion.
 """
 
 GAP_DETECTION = """Assess research coverage. Identify unanswered important areas,

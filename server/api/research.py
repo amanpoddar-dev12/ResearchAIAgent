@@ -10,6 +10,7 @@ from uuid import uuid4
 from app.agent import ResearchAgent
 from app.config import Settings
 from app.models import ResearchState
+from app.modes import MODES
 from .models import ResearchRequest
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,9 @@ class ResearchJob:
     queue: asyncio.Queue[dict[str, Any]] = field(default_factory=asyncio.Queue)
     done: bool = False
     state: ResearchState | None = None
+    progress: int = 0
+    phase: str = "starting"
+    mode: str = "standard"
 
 
 jobs: dict[str, ResearchJob] = {}
@@ -55,29 +59,38 @@ async def start_research(request: ResearchRequest) -> str:
 async def _run_job(research_id: str, request: ResearchRequest) -> None:
     job = jobs[research_id]
     loop = asyncio.get_running_loop()
-    settings = Settings(
-        gemini_api_key=Settings().gemini_api_key,
-        gemini_model=Settings().gemini_model,
-        tavily_api_key=Settings().tavily_api_key,
-        max_llm_requests=Settings().max_llm_requests,
-        gemini_timeout=Settings().gemini_timeout,
-        max_sources=request.max_sources,
-        max_searches={"quick": 3, "standard": 6, "deep": 10}[request.depth],
-        max_iterations={"quick": 1, "standard": 3, "deep": 5}[request.depth],
-    )
+    job.mode = request.mode or request.depth
+
+    def enqueue(event_type: str, message: str, data: Any = None) -> None:
+        milestones = {"planning_started": (5, "planning"), "planning_completed": (20, "search"),
+            "analysis_started": (75, "conflicts"), "synthesis_started": (85, "synthesis"),
+            "report_generated": (100, "complete")}
+        if event_type in milestones:
+            progress, phase = milestones[event_type]
+            job.progress, job.phase = max(job.progress, progress), phase
+        if event_type == "research_progress":
+            job.progress = max(job.progress, min(100, data["progress"]))
+            job.phase = data["phase"]
+        payload = _event(event_type, message, data)
+        payload.update(progress=job.progress, phase=job.phase, mode=job.mode)
+        job.queue.put_nowait(payload)
 
     def emit(event_type: str, message: str, data: Any = None) -> None:
-        asyncio.run_coroutine_threadsafe(job.queue.put(_event(event_type, message, data)), loop)
+        loop.call_soon_threadsafe(enqueue, event_type, message, data)
 
     try:
-        emit("research_started", "Understanding the research question")
+        enqueue("research_started", "Understanding the research question")
+        settings = Settings()
+        config = MODES[job.mode]
+        settings.max_sources = request.budgets.max_sources or min(settings.max_sources, request.max_sources, config.sources)
         agent = ResearchAgent(settings)
-        state = await asyncio.to_thread(agent.run, request.question, emit)
+        state = await asyncio.to_thread(agent.run, request.question, emit, mode=job.mode, filters=request.filters,
+            target_claims=request.target_claims, comparison_items=request.comparison_items, budgets=request.budgets)
         job.state = state
-        emit("complete", "Research completed", {"state": _public_state(state), "report": state.final_report})
-    except Exception as exc:
+        enqueue("complete", "Research completed", {"state": _public_state(state), "report": state.final_report})
+    except Exception:
         logger.exception("Research job %s failed", research_id)
-        emit("research_failed", "Research failed", {"error": str(exc) if settings.debug else "The research service could not complete this request."})
+        enqueue("research_failed", "Research failed", {"error": "The research service could not complete this request."})
     finally:
         job.done = True
         await job.queue.put({"type": "_end"})

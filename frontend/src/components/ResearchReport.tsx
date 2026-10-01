@@ -1,39 +1,89 @@
-import { Check, Clipboard, Download, FileText, Printer } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { Root, Element, Text } from "hast";
+import { Citation } from "./Citation";
+import type { ResearchSource } from "../types/research";
 
-export function ResearchReport({ markdown }: { markdown: string }) {
+export function ResearchReport({ markdown, sources, onPreview }: { markdown: string; sources: ResearchSource[]; onPreview: (source: ResearchSource) => void }) {
   const [copied, setCopied] = useState(false);
-  const title = markdown.match(/^#\s+(.+)$/m)?.[1] || "Research Report";
+  const [copyError, setCopyError] = useState("");
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(0);
+  const [count, setCount] = useState(0);
+  const article = useRef<HTMLElement>(null);
+  const copyTimer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => clearTimeout(copyTimer.current), []);
+  const linkedMarkdown = useMemo(() => markdown.replace(/\[(\d+)\](?!\()/g, (original, number: string) => {
+    const source = sources[Number(number) - 1];
+    return source ? "[" + number + "](#source-" + source.id + ")" : original;
+  }), [markdown, sources]);
+  const headings = useMemo(() => [...markdown.matchAll(/^#{2,3}\s+(.+)$/gm)].map((match) => ({ label: match[1].replace(/[*_`]/g, ""), id: match[1].toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") })), [markdown]);
+  const highlight = useMemo(() => () => (tree: Root) => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return;
+    const visit = (node: Root | Element) => {
+      for (let childIndex = node.children.length - 1; childIndex >= 0; childIndex--) {
+        const child = node.children[childIndex];
+        if (child.type === "element") { visit(child); continue; }
+        if (child.type !== "text") continue;
+        const text = child.value;
+        const parts: (Text | Element)[] = [];
+        let start = 0, index = text.toLowerCase().indexOf(needle);
+        while (index >= 0) {
+          if (index > start) parts.push({ type: "text", value: text.slice(start, index) });
+          parts.push({ type: "element", tagName: "mark", properties: {}, children: [{ type: "text", value: text.slice(index, index + needle.length) }] });
+          start = index + needle.length; index = text.toLowerCase().indexOf(needle, start);
+        }
+        if (start < text.length) parts.push({ type: "text", value: text.slice(start) });
+        node.children.splice(childIndex, 1, ...parts);
+      }
+    };
+    visit(tree);
+  }, [query]);
+  useEffect(() => { setCount(article.current?.querySelectorAll("mark").length || 0); setActive(0); }, [query, markdown]);
+  useEffect(() => {
+    const matches = article.current?.querySelectorAll("mark");
+    matches?.forEach((mark, index) => mark.classList.toggle("report-match-current", index === active));
+    if (query.trim()) matches?.[active]?.scrollIntoView({ block: "center" });
+  }, [active, count, query]);
   const download = () => {
-    const url = URL.createObjectURL(new Blob([markdown], { type: "text/markdown" }));
+    const url = URL.createObjectURL(new Blob([markdown], { type: "text/markdown;charset=utf-8" }));
     const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = "research-report.md";
-    anchor.click();
-    URL.revokeObjectURL(url);
+    anchor.href = url; anchor.download = "research-report.md"; anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
-  const downloadPdf = () => window.print();
   const copy = async () => {
-    await navigator.clipboard.writeText(markdown);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1800);
+    try {
+      await navigator.clipboard.writeText(markdown); setCopied(true); setCopyError("");
+      clearTimeout(copyTimer.current); copyTimer.current = setTimeout(() => setCopied(false), 1800);
+    } catch { setCopyError("Clipboard access failed. Download the Markdown report instead."); }
   };
-  return <section className="report-wrapper min-w-0 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
-    <header className="border-b border-slate-100 bg-gradient-to-br from-indigo-50 via-white to-white px-6 py-6 dark:border-slate-800 dark:from-indigo-950/40 dark:via-slate-900 dark:to-slate-900 sm:px-8">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex min-w-0 items-start gap-3">
-          <span className="rounded-2xl bg-indigo-600 p-2.5 text-white"><FileText aria-hidden="true" size={20} /></span>
-          <div className="min-w-0"><p className="text-xs font-semibold uppercase tracking-[0.18em] text-indigo-600 dark:text-indigo-300">Evidence brief</p><h2 className="mt-1 break-words text-2xl font-semibold tracking-tight text-slate-950 dark:text-white">{title}</h2><p className="mt-2 text-sm text-slate-500">Sourced analysis generated from the collected evidence.</p></div>
-        </div>
-        <div className="flex shrink-0 flex-wrap gap-2">
-          <button className="icon-button focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500" aria-label={copied ? "Report copied" : "Copy report"} title={copied ? "Report copied" : "Copy report"} onClick={copy}>{copied ? <Check aria-hidden="true" size={16} /> : <Clipboard aria-hidden="true" size={16} />}</button>
-          <button className="icon-button focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500" aria-label="Download Markdown report" title="Download Markdown" onClick={download}><Download aria-hidden="true" size={16} /></button>
-          <button className="icon-button focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500" aria-label="Download PDF report" title="Download PDF" onClick={downloadPdf}><Printer aria-hidden="true" size={16} /></button>
-        </div>
+  return <section id="final-report" className="report-wrapper min-w-0 overflow-hidden rounded-3xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+    <header className="report-toolbar border-b border-slate-100 p-5 dark:border-slate-800">
+      <h2 className="text-lg font-semibold">Research report</h2>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button className="button-secondary" onClick={copy}>{copied ? "Copied" : "Copy report"}</button>
+        <button className="button-secondary" onClick={download}>Export Markdown</button>
+        <button className="button-secondary" onClick={() => window.print()}>Print</button>
+        <button className="button-secondary" onClick={() => window.print()} title="Choose Save as PDF in your browser print dialog">Export PDF</button>
       </div>
+      <p className="mt-2 text-xs text-slate-500">PDF export uses your browser’s “Save as PDF” destination.</p>
+      {copyError && <p role="alert" className="mt-2 text-sm text-red-600">{copyError}</p>}
+      <div className="mt-4 flex flex-wrap items-center gap-2"><label htmlFor="report-search" className="sr-only">Search within report</label><input id="report-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search within report" className="select min-h-10 flex-1" /><span aria-live="polite" className="text-xs">{count ? active + 1 : 0} / {count}</span><button aria-label="Previous match" disabled={!count} className="button-secondary" onClick={() => setActive((active + count - 1) % count)}>Previous</button><button aria-label="Next match" disabled={!count} className="button-secondary" onClick={() => setActive((active + 1) % count)}>Next</button></div>
     </header>
-    <article className="report-content px-4 py-6 sm:px-8 sm:py-9"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ table: ({ children }) => <div className="report-table-wrap"><table>{children}</table></div> }}>{markdown}</ReactMarkdown></article>
+    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_180px]">
+    <article ref={article} className="report-content px-4 py-6 sm:px-8">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[highlight]} components={{
+        table: ({ children }) => <div className="report-table-wrap"><table>{children}</table></div>,
+        h2: ({ children }) => { const label = String(children); const id = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); return <h2 id={id}>{children}</h2>; },
+        a: ({ href, children }) => {
+          const source = sources.find((source) => href === "#source-" + source.id);
+          return source ? <Citation n={sources.indexOf(source) + 1} onClick={() => onPreview(source)} /> : <a href={href} target="_blank" rel="noreferrer">{children}</a>;
+        },
+      }}>{linkedMarkdown}</ReactMarkdown>
+    </article>
+    {headings.length > 0 && <nav className="order-first hidden border-l border-slate-100 p-4 lg:order-last lg:block dark:border-slate-800" aria-label="Report sections"><p className="eyebrow">On this page</p><div className="mt-3 space-y-2">{headings.map((heading) => <a key={heading.id} href={`#${heading.id}`} className="block text-xs text-slate-500 hover:text-indigo-600">{heading.label}</a>)}</div></nav>}
+    </div>
   </section>;
 }

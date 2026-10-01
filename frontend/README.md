@@ -6,7 +6,7 @@ From the project root:
 
 ```powershell
 pip install -r requirements.txt
-uvicorn server.main:app --reload --port 8000
+uvicorn server.main:app --reload --port 8001
 ```
 
 In a second terminal:
@@ -35,4 +35,8 @@ Then start Vite in another:
 npm run dev
 ```
 
-The local `.env` targets FastAPI on port 8001. Start FastAPI on that same port and restart Vite after changing environment values. Set `VITE_API_URL` only when the frontend and backend are deployed separately; that makes the browser call the backend directly instead of using the Vite proxy.
+During `npm run dev`, fetch and SSE requests use same-origin `/api` URLs through Vite's proxy. The proxy targets `VITE_BACKEND_URL`, defaulting to local FastAPI on port 8001. Start FastAPI on that same port when using the local backend, and restart Vite after changing environment values.
+
+`VITE_API_URL` is used only in production builds; it must point to the FastAPI backend, not the frontend website. Production builds retain `VITE_BACKEND_URL` as a fallback when `VITE_API_URL` is unset. A separately hosted backend must allow the deployed frontend origin through `CORS_ORIGINS`.
+
+API routing regression tests (no additional dependencies): `node --test tests/api.test.mjs` from this directory.

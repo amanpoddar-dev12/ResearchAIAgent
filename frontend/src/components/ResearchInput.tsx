@@ -1,11 +1,53 @@
 import { ArrowUp, Sparkles } from "lucide-react";
-import type { Depth } from "../types/research";
+import { modes, sourceTypes } from "../types/research";
+import type { ResearchMode, SourceFilters, ResearchBudgets } from "../types/research";
 
-const suggestions = ["Compare the major AI coding agents in 2026", "Research the current humanoid robotics market", "Analyze recent developments in battery technology"];
-export function ResearchInput({ value, setValue, depth, setDepth, maxSources, setMaxSources, disabled, onSubmit }: { value: string; setValue: (v: string) => void; depth: Depth; setDepth: (v: Depth) => void; maxSources: number; setMaxSources: (v: number) => void; disabled: boolean; onSubmit: () => void }) {
-  return <section className="mx-auto max-w-3xl">
-    <div className="mb-8 text-center sm:mb-10"><div className="mb-4 inline-flex items-center gap-1.5 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 dark:border-indigo-900 dark:bg-indigo-950/50 dark:text-indigo-300"><Sparkles aria-hidden="true" size={13} /> Evidence-led research</div><h1 className="text-balance text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl lg:text-5xl dark:text-white">Turn a question into a sourced report.</h1><p className="mx-auto mt-4 max-w-xl text-pretty text-sm leading-6 text-slate-600 sm:text-base dark:text-slate-400">Ask a question and watch the agent investigate the evidence in real time.</p></div>
-    <div className="rounded-3xl border border-slate-200/90 bg-white p-2 shadow-[0_20px_45px_-30px_rgba(79,70,229,0.45)] dark:border-slate-800 dark:bg-slate-900 sm:p-3"><label htmlFor="research-question" className="sr-only">Research question</label><textarea id="research-question" name="question" value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSubmit(); } }} disabled={disabled} rows={4} placeholder="What would you like me to research…" className="w-full resize-none bg-transparent p-4 text-base leading-7 outline-none placeholder:text-slate-400 focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900" /><div className="flex flex-col gap-3 border-t border-slate-100 px-3 pt-3 dark:border-slate-800 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between"><div className="flex flex-wrap items-center gap-2 text-sm"><label htmlFor="research-depth" className="sr-only">Research depth</label><select id="research-depth" value={depth} onChange={(e) => setDepth(e.target.value as Depth)} className="select min-h-10 flex-1 sm:flex-none"><option value="quick">Quick</option><option value="standard">Standard</option><option value="deep">Deep</option></select><label htmlFor="max-sources" className="sr-only">Maximum sources</label><select id="max-sources" value={maxSources} onChange={(e) => setMaxSources(Number(e.target.value))} className="select min-h-10 flex-1 sm:flex-none">{[5, 10, 15, 20].map((n) => <option key={n} value={n}>{n} sources</option>)}</select></div><button disabled={disabled || !value.trim()} onClick={onSubmit} className="button-primary min-h-10 w-full justify-center sm:w-auto">Research <ArrowUp aria-hidden="true" size={16} /></button></div></div>
-    <div className="mt-5 flex flex-wrap justify-center gap-2"><span className="w-full text-center text-xs font-medium text-slate-400">Try a starting point</span>{suggestions.map((item) => <button key={item} onClick={() => setValue(item)} className="chip min-h-10 text-left">{item}</button>)}</div>
+interface Props {
+  value: string; setValue: (value: string) => void;
+  mode: ResearchMode; setMode: (mode: ResearchMode) => void;
+  maxSources: number; setMaxSources: (value: number) => void;
+  filters: SourceFilters; setFilters: (filters: SourceFilters) => void;
+  targets: string; setTargets: (value: string) => void;
+  disabled: boolean; onSubmit: () => void;
+  budgets: ResearchBudgets; setBudgets: (value: ResearchBudgets) => void;
+}
+export function ResearchInput({ value, setValue, mode, setMode, maxSources, setMaxSources, filters, setFilters, targets, setTargets, disabled, onSubmit, budgets, setBudgets }: Props) {
+  const splitDomains = (value: string) => value.split(",").map((item) => item.trim()).filter(Boolean);
+  const invalidDates = Boolean(filters.date_from && filters.date_to && filters.date_from > filters.date_to);
+  const invalidTargets = mode === "compare" && new Set(targets.split("\n").map((item) => item.trim()).filter(Boolean)).size < 2;
+  return <section className="research-input mx-auto max-w-3xl">
+    <div className="mb-8 text-center"><div className="mb-4 inline-flex items-center gap-2 rounded-full bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"><Sparkles size={14} aria-hidden="true" /> Evidence-led research</div>
+      <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Turn a question into a sourced report.</h1>
+      <p className="mt-3 text-sm text-slate-500">Choose a research strategy, refine your sources, and inspect the evidence.</p>
+    </div>
+    <form onSubmit={(event) => { event.preventDefault(); if (!invalidDates && !invalidTargets) onSubmit(); }} className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <fieldset disabled={disabled} className="space-y-4">
+        <label className="block text-sm font-medium" htmlFor="research-question">Research question</label>
+        <textarea id="research-question" required minLength={3} value={value} onChange={(event) => setValue(event.target.value)} rows={3} placeholder="What would you like to investigate?" className="w-full rounded-xl border border-slate-200 bg-transparent p-3 outline-none focus:ring-2 focus:ring-indigo-500 dark:border-slate-700" />
+        <div className="flex flex-wrap gap-3">
+          <label className="flex-1 text-xs">Research mode<select aria-label="Research mode" value={mode} onChange={(event) => { setMode(event.target.value as ResearchMode); setTargets(""); }} className="select mt-1 block min-h-10 w-full">{modes.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+          <label className="text-xs">Maximum sources<select aria-label="Maximum sources" value={maxSources} onChange={(event) => setMaxSources(Number(event.target.value))} className="select mt-1 block min-h-10">{[5, 10, 15, 20].map((number) => <option key={number} value={number}>{number}</option>)}</select></label>
+        </div>
+        {(mode === "fact_check" || mode === "compare") && <label className="block text-sm">{mode === "compare" ? "Items to compare (one per line, 2–6)" : "Specific claims to verify (one per line, up to 10; defaults to your question)"}<textarea aria-label={mode === "compare" ? "Items to compare" : "Claims to verify"} rows={3} value={targets} onChange={(event) => setTargets(event.target.value)} className="mt-2 w-full rounded-lg border border-slate-200 bg-transparent p-3 dark:border-slate-700" /></label>}
+        <details className="rounded-xl border border-slate-200 p-3 dark:border-slate-700">
+          <summary className="cursor-pointer text-sm font-medium">Source filters</summary>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <label className="text-xs">Published from<input aria-label="Published from" type="date" value={filters.date_from || ""} onChange={(event) => setFilters({ ...filters, date_from: event.target.value || null })} className="select mt-1 block w-full" /></label>
+            <label className="text-xs">Published through<input aria-label="Published through" type="date" value={filters.date_to || ""} onChange={(event) => setFilters({ ...filters, date_to: event.target.value || null })} className="select mt-1 block w-full" /></label>
+            <label className="text-xs">Include domains (comma separated)<input aria-label="Include domains" value={filters.include_domains.join(",")} onChange={(event) => setFilters({ ...filters, include_domains: event.target.value.split(",") })} placeholder="example.org, docs.example.org" className="select mt-1 block w-full" onBlur={(event) => setFilters({ ...filters, include_domains: splitDomains(event.target.value) })} /></label>
+            <label className="text-xs">Exclude domains (comma separated)<input aria-label="Exclude domains" value={filters.exclude_domains.join(",")} onChange={(event) => setFilters({ ...filters, exclude_domains: event.target.value.split(",") })} placeholder="example.net" className="select mt-1 block w-full" onBlur={(event) => setFilters({ ...filters, exclude_domains: splitDomains(event.target.value) })} /></label>
+            <div className="sm:col-span-2"><p className="mb-2 text-xs">Source types (none selected includes all)</p><div className="flex flex-wrap gap-3">{sourceTypes.map((type) => <label key={type} className="flex items-center gap-1.5 text-xs capitalize"><input type="checkbox" checked={filters.source_types.includes(type)} onChange={(event) => setFilters({ ...filters, source_types: event.target.checked ? [...filters.source_types, type] : filters.source_types.filter((item) => item !== type) })} />{type}</label>)}</div></div>
+            <label className="flex items-center gap-2 text-xs sm:col-span-2"><input type="checkbox" checked={filters.prefer_primary} onChange={(event) => setFilters({ ...filters, prefer_primary: event.target.checked })} />Prefer primary sources, original studies and documentation</label>
+            <p className="text-xs text-slate-500 sm:col-span-2">Filters apply before extraction. Date filters exclude undated sources. Types are inferred; primary preference ranks each search batch.</p>
+          </div>
+        </details>
+        <details className="rounded-xl border border-slate-200 p-3 dark:border-slate-700"><summary className="cursor-pointer text-sm font-medium">Research budgets</summary><p className="mt-2 text-xs text-slate-500">Leave blank to use mode defaults. Maximum sources above applies unless overridden here.</p><div className="mt-3 grid gap-3 sm:grid-cols-2">{([
+          ["max_searches", "Searches", 100], ["max_sources", "Sources", 100], ["max_iterations", "Iterations", 20], ["max_parallel_tasks", "Parallel searches", 8], ["max_wall_seconds", "Time limit (seconds)", 3600],
+        ] as const).map(([key, label, max]) => <label key={key} className="text-xs">{label}<input aria-label={label} type="number" min={1} max={max} step={1} value={budgets[key] ?? ""} placeholder="Mode default" onChange={(event) => setBudgets({ ...budgets, [key]: event.target.value ? Number(event.target.value) : undefined })} className="select mt-1 block w-full" /></label>)}</div></details>
+        {invalidDates && <p role="alert" className="text-sm text-red-600">Start date must be on or before end date.</p>}
+        {invalidTargets && <p className="text-sm text-slate-500">Enter at least two distinct comparison items.</p>}
+        <button disabled={disabled || value.trim().length < 3 || invalidDates || invalidTargets} className="button-primary min-h-10 w-full justify-center">Research <ArrowUp size={16} aria-hidden="true" /></button>
+      </fieldset>
+    </form>
   </section>;
 }

@@ -87,7 +87,7 @@ npm run dev
 
 Open http://localhost:5173. The browser never receives Gemini or Tavily credentials. `POST /api/research` starts a job and `GET /api/research/{research_id}/stream` streams real planning, search, source, finding, gap, and completion events.
 
-The Vite development server proxies `/api` to `VITE_BACKEND_URL`, configured locally as `http://127.0.0.1:8001`. Start FastAPI on port 8001 before using the frontend, and restart Vite after changing the port. If the frontend is deployed separately, set `VITE_API_URL` to the public FastAPI URL.
+During local development, browser requests use same-origin `/api` URLs and Vite proxies them to `VITE_BACKEND_URL` (default `http://127.0.0.1:8001`). Start FastAPI on port 8001 when using the local backend, and restart Vite after changing the port. `VITE_API_URL` applies to production builds only: set it to the public FastAPI backend URL, not the frontend website URL, when deploying separately.
 Set the backend's `CORS_ORIGINS` environment variable to the exact deployed frontend
 origin (for example, `https://research-ai-agent-4rpb-ruby.vercel.app`), using commas
 to separate multiple origins.
