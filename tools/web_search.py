@@ -12,15 +12,15 @@ def normalize_url(url: str) -> str:
     parts = urlsplit(url.strip())
     if parts.scheme not in {"http", "https"} or not parts.netloc:
         raise ValueError(f"Invalid URL: {url}")
-    query = [(key, value) for key, value in parse_qsl(parts.query) if not key.lower().startswith("utm_")]
-    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/") or "/", urlencode(query), ""))
+    query = sorted((key, value) for key, value in parse_qsl(parts.query) if not key.lower().startswith("utm_") and key.lower() not in {"fbclid", "gclid", "msclkid", "mc_cid", "mc_eid"})
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower().removeprefix("www."), parts.path.rstrip("/") or "/", urlencode(query), ""))
 
 
-def search_web(api_key: str, query: str, max_results: int = 5, timeout: float = 20.0) -> list[SearchResult]:
+def search_web(api_key: str, query: str, max_results: int = 5, timeout: float = 20.0, *, search_depth: str = "basic") -> list[SearchResult]:
     if not api_key:
         raise ValueError("TAVILY_API_KEY is missing")
     logger.info("Searching Tavily: %s", query)
-    payload = {"api_key": api_key, "query": query, "max_results": max_results, "include_answer": False}
+    payload = {"api_key": api_key, "query": query, "max_results": max_results, "include_answer": False, "search_depth": search_depth}
     try:
         response = httpx.post("https://api.tavily.com/search", json=payload, timeout=timeout)
         response.raise_for_status()

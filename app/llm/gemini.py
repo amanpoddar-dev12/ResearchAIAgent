@@ -34,6 +34,7 @@ class GeminiClient(LLMClient):
         self._max_requests = max_requests
         self._requests_used = 0
         self.timeout = timeout
+        self.deadline: float | None = None
         self.client = client or genai.Client(
             api_key=api_key,
             http_options=types.HttpOptions(timeout=int(timeout * 1000)),
@@ -47,7 +48,15 @@ class GeminiClient(LLMClient):
     def max_requests(self) -> int:
         return self._max_requests
 
+    def _http_options(self):
+        if self.deadline is None:
+            return None
+        remaining = max(.001, min(self.timeout, self.deadline - time.monotonic()))
+        return types.HttpOptions(timeout=max(1, int(remaining * 1000)))
+
     def _reserve(self) -> None:
+        if self.deadline is not None and time.monotonic() >= self.deadline:
+            raise LLMRequestBudgetExceeded("Session wall-clock budget exhausted")
         if self._requests_used >= self._max_requests:
             raise LLMRequestBudgetExceeded(
                 "Gemini request budget reached; continuing with collected evidence."
@@ -67,6 +76,8 @@ class GeminiClient(LLMClient):
     def _request(self, call: Any) -> Any:
         self._reserve()
         for attempt in range(3):
+            if self.deadline is not None and time.monotonic() >= self.deadline:
+                raise LLMRequestBudgetExceeded("Session wall-clock budget exhausted")
             try:
                 return call()
             except Exception as exc:
@@ -107,6 +118,7 @@ class GeminiClient(LLMClient):
             lambda: self.client.models.generate_content(
                 model=self.model_name,
                 contents=prompt,
+                config=types.GenerateContentConfig(http_options=self._http_options()),
             )
         )
         text = getattr(response, "text", None)
@@ -120,6 +132,7 @@ class GeminiClient(LLMClient):
                 model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
+                    http_options=self._http_options(),
                     response_mime_type="application/json",
                     response_schema=schema,
                 ),
@@ -138,6 +151,7 @@ class GeminiClient(LLMClient):
                     model=self.model_name,
                     contents=retry_prompt,
                     config=types.GenerateContentConfig(
+                        http_options=self._http_options(),
                         response_mime_type="application/json",
                         response_schema=schema,
                     ),
