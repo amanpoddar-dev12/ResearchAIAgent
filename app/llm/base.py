@@ -1,4 +1,4 @@
-"""Provider-independent LLM contracts and request budgeting."""
+"""Provider-agnostic LLM contracts, errors, and structured-call compatibility."""
 
 from abc import ABC, abstractmethod
 from typing import Any, TypeVar
@@ -9,19 +9,46 @@ ModelT = TypeVar("ModelT", bound=BaseModel)
 
 
 class LLMError(RuntimeError):
-    """A controlled model-service failure."""
+    """Base class for controlled model-service failures."""
 
 
 class ModelConfigurationError(LLMError):
-    """The configured model or credentials cannot be used."""
+    """Required provider configuration is missing or invalid."""
 
 
 class LLMRequestBudgetExceeded(LLMError):
-    """The application-level Gemini request budget has been exhausted."""
+    """The application-level model request budget has been exhausted."""
+
+
+class ProviderError(LLMError):
+    """A provider failure without exposing credentials or response secrets."""
+
+    def __init__(self, provider: str, task: str, message: str, status_code: int | None = None):
+        self.provider = provider
+        self.task = task
+        self.status_code = status_code
+        suffix = f" (HTTP {status_code})" if status_code is not None else ""
+        super().__init__(f"{provider} provider failed for {task}: {message}{suffix}")
+
+
+class ProviderTimeoutError(ProviderError):
+    pass
+
+
+class ProviderRateLimitError(ProviderError):
+    pass
+
+
+class ProviderAuthError(ProviderError):
+    pass
+
+
+class ProviderResponseError(ProviderError):
+    pass
 
 
 class LLMClient(ABC):
-    """Interface consumed by research orchestration components."""
+    """Async provider contract consumed by research orchestration."""
 
     @property
     @abstractmethod
@@ -34,9 +61,27 @@ class LLMClient(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def generate_text(self, prompt: str) -> str:
+    async def complete(self, messages: list[dict[str, str]], *, task: str,
+                       response_model: type[ModelT] | None = None,
+                       temperature: float = 0.2, max_tokens: int | None = None) -> ModelT | str:
         raise NotImplementedError
 
-    @abstractmethod
-    def generate_structured(self, prompt: str, schema: Any) -> ModelT:
-        raise NotImplementedError
+    def generate_text(self, prompt: str, *, task: str = "open_reasoning") -> str:
+        from .sync import run_sync
+        result = run_sync(self.complete([{"role": "user", "content": prompt}], task=task))
+        return result if isinstance(result, str) else result.model_dump_json()
+
+    def generate_structured(self, prompt: str, schema: type[ModelT], *, task: str = "open_reasoning") -> ModelT:
+        from .sync import run_sync
+        result = run_sync(self.complete([{"role": "user", "content": prompt}], task=task, response_model=schema))
+        return result
+
+
+def invoke_structured(client: Any, prompt: str, schema: type[ModelT], *, task: str) -> ModelT:
+    """Call routed clients with task metadata while retaining old offline fakes."""
+    try:
+        return client.generate_structured(prompt, schema, task=task)
+    except TypeError as exc:
+        if "unexpected keyword argument 'task'" not in str(exc):
+            raise
+        return client.generate_structured(prompt, schema)

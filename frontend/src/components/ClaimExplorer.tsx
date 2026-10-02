@@ -1,0 +1,30 @@
+import { useMemo, useState } from "react";
+import { ChevronDown, Link2, Search } from "lucide-react";
+import type { Evidence, Finding, ResearchSource, Verification } from "../types/research";
+import { ConfidenceBar } from "./ConfidenceBar";
+import { VerificationBadge } from "./VerificationBadge";
+
+type Filter = "all" | NonNullable<Finding["evidence_status"]>;
+
+export function ClaimExplorer({ findings, evidence, sources, verifications, onPreview }: {
+  findings: Finding[]; evidence: Evidence[]; sources: ResearchSource[]; verifications: Verification[]; onPreview: (source: ResearchSource) => void;
+}) {
+  const [filter, setFilter] = useState<Filter>("all");
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<string | null>(null);
+  const visible = useMemo(() => findings
+    .filter((finding) => filter === "all" || finding.evidence_status === filter)
+    .filter((finding) => !query.trim() || `${finding.id} ${finding.claim}`.toLowerCase().includes(query.toLowerCase()))
+    .sort((left, right) => (right.confidence_score ?? right.confidence ?? 0) - (left.confidence_score ?? left.confidence ?? 0)), [findings, filter, query]);
+  const active = visible.find((finding) => finding.id === selected) || visible[0];
+  const linkedEvidence = active ? evidence.filter((item) => item.claim_id === active.id || active.evidence_ids?.includes(item.id) || active.supporting_evidence_ids?.includes(item.id) || active.contradicting_evidence_ids?.includes(item.id)) : [];
+  const verification = active ? verifications.find((item) => item.claim_id === active.id) : undefined;
+  return <section id="claims" className="card" aria-label="Claim explorer">
+    <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="section-title"><Link2 size={17} /> Claim explorer <span className="count">{findings.length}</span></h2><span className="text-xs text-slate-500">Claim → evidence → source</span></div>
+    <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_auto]"><label className="flex items-center gap-2"><Search size={14} /><input aria-label="Search claims" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search claim text or ID" className="select w-full" /></label><select aria-label="Filter claims" value={filter} onChange={(event) => setFilter(event.target.value as Filter)} className="select"><option value="all">All statuses</option><option value="Supported">Supported</option><option value="Partially Supported">Partially supported</option><option value="Contradicted">Contradicted</option><option value="Unverified">Unverified</option></select></div>
+    <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+      <div className="space-y-2">{visible.map((finding, index) => <button type="button" key={finding.id || index} onClick={() => setSelected(finding.id || null)} className={`w-full rounded-xl border p-3 text-left transition-colors ${active?.id === finding.id ? "border-indigo-400 bg-indigo-50/60 dark:border-indigo-700 dark:bg-indigo-950/30" : "border-slate-200 hover:border-indigo-200 dark:border-slate-800"}`}><div className="flex items-start justify-between gap-2"><span className="text-xs font-semibold text-indigo-600">{finding.id || `Claim ${index + 1}`}</span><VerificationBadge status={finding.evidence_status} /></div><p className="mt-2 text-sm leading-6">{finding.claim}</p><p className="mt-2 text-xs text-slate-500">{finding.source_ids.length} sources · {(finding.supporting_evidence_ids || []).length} supporting · {(finding.contradicting_evidence_ids || []).length} contradicting</p></button>)}{!visible.length && <p className="text-sm text-slate-500">No claims match this filter.</p>}</div>
+      {active ? <div className="rounded-xl border border-slate-200 p-4 dark:border-slate-800"><div className="flex items-start justify-between gap-3"><div><p className="eyebrow">{active.id || "Claim"}</p><h3 className="mt-1 font-medium leading-6">{active.claim}</h3></div><VerificationBadge status={active.evidence_status} /></div><div className="mt-4 flex flex-wrap gap-4"><ConfidenceBar value={active.confidence_score ?? active.confidence} label="Confidence estimate" /><span className="text-xs text-slate-500">Importance: {active.importance || "Not available"}</span></div><details className="mt-4" open><summary className="flex cursor-pointer items-center gap-2 text-sm font-medium"><ChevronDown size={15} /> Evidence chain ({linkedEvidence.length})</summary><div className="mt-3 space-y-3">{linkedEvidence.map((item) => { const source = sources.find((candidate) => candidate.id === item.source_id); return <div key={item.id} className="rounded-lg border border-slate-100 p-3 dark:border-slate-800"><div className="flex items-center justify-between gap-2"><span className={`badge ${item.relation === "supports" ? "badge-success" : item.relation === "contradicts" ? "badge-error" : ""}`}>{item.relation}</span><span className="text-xs text-slate-500">{item.id}</span></div><p className="mt-2 text-sm leading-6">“{item.excerpt}”</p><div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500"><span>Strength: {item.strength_score === undefined ? "Not available" : `${Math.round(item.strength_score * 100)}%`}</span>{source && <button type="button" className="button-secondary" onClick={() => onPreview(source)}>Source: {source.domain}</button>}</div></div>; })}{!linkedEvidence.length && <p className="text-sm text-slate-500">No linked evidence is available for this claim.</p>}</div></details>{verification && <div className="mt-4 rounded-lg bg-slate-50 p-3 text-xs dark:bg-slate-950/50"><p className="font-medium">Review trace</p><p className="mt-1 text-slate-500">{verification.verified_by.join(" · ") || "Verification providers not reported"}</p><p className="mt-2 leading-5 text-slate-600 dark:text-slate-300">{verification.reasoning}</p></div>}</div> : <p className="text-sm text-slate-500">Select a claim to inspect its chain.</p>}
+    </div>
+  </section>;
+}

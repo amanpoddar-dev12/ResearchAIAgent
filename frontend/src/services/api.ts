@@ -1,4 +1,4 @@
-import type { ResearchEvent, ResearchRequest, ResearchState } from "../types/research";
+import type { ChatResponse, ResearchEvent, ResearchRequest, ResearchState } from "../types/research";
 
 // Local fetch and SSE requests must use Vite's /api proxy, even when a production URL is configured.
 const API_URL = (import.meta.env.DEV ? "" : import.meta.env.VITE_API_URL || import.meta.env.VITE_BACKEND_URL || "").replace(/\/$/, "");
@@ -22,7 +22,19 @@ export async function startResearch(payload: ResearchRequest): Promise<string> {
     const detail = (await response.json().catch(() => null))?.detail;
     throw new Error(Array.isArray(detail) ? detail.map((item: { msg: string }) => item.msg).join("; ") : detail || "Could not start research.");
   }
+
   return (await response.json()).research_id;
+}
+
+export async function askResearch(id: string, message: string, context: { claim_ids?: string[]; finding_ids?: string[]; evidence_ids?: string[]; source_ids?: string[] } = {}, history: { role: "user" | "assistant"; content: string }[] = []): Promise<ChatResponse> {
+  const response = await apiRequest(`${API_URL}/api/research/${id}/chat`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message, context, history }),
+  });
+  if (!response.ok) {
+    const detail = (await response.json().catch(() => null))?.detail;
+    throw new Error(detail || "The research assistant is temporarily unavailable.");
+  }
+  return await response.json() as ChatResponse;
 }
 
 export function streamResearch(id: string, onEvent: (event: ResearchEvent) => void, onError: (error: Error) => void): () => void {

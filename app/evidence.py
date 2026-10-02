@@ -3,6 +3,7 @@
 from collections import Counter
 import re
 from app.models import CitationRejection, Evidence, EvidenceStatus, ResearchState
+from app.scoring import score_finding
 from app.modes import MODES
 from app.research_control import audit
 from app.deduplication import near_duplicate
@@ -66,8 +67,8 @@ def validate_evidence(state: ResearchState) -> None:
             item = candidates.get(evidence_id)
             reason = "Nonexistent evidence" if item is None else "Ambiguous evidence ID" if evidence_id in duplicate_ids else source_rejection(state, item.source_id)
             if item and not reason:
-                excerpt = " ".join(item.excerpt.split())
-                content = " ".join(sources[item.source_id].content.split())
+                excerpt = item.excerpt
+                content = sources[item.source_id].content
                 if not excerpt or excerpt not in content:
                     reason = "Excerpt is not present in collected source text"
             if reason:
@@ -82,6 +83,8 @@ def validate_evidence(state: ResearchState) -> None:
                 reject(state, finding.id, reason or "Citation has no validated supporting excerpt", source_id)
         finding.evidence_ids = [item.id for item in linked]
         finding.source_ids = linked_sources
+        finding.supporting_evidence_ids = [item.id for item in linked if item.relation == "supports"]
+        finding.contradicting_evidence_ids = [item.id for item in linked if item.relation == "contradicts"]
         finding.evidence_status = evidence_status(linked)
         retrieved_questions = list(dict.fromkeys(qid for item in linked for qid in sources[item.source_id].sub_question_ids))
         finding.sub_question_ids = [qid for qid in finding.sub_question_ids if qid in retrieved_questions] if state.explicit_sub_question_links else retrieved_questions
@@ -90,6 +93,16 @@ def validate_evidence(state: ResearchState) -> None:
         if not linked:
             reject(state, finding.id, "Claim has no traceable evidence; retained as Unverified")
     state.evidence = list(accepted.values())
+    for finding in state.findings:
+        score = score_finding(state, finding)
+        finding.confidence_score = score.score
+        finding.score_source_quality = score.source_quality
+        finding.score_evidence_relevance = score.evidence_relevance
+        finding.score_source_agreement = score.source_agreement
+        finding.score_freshness = score.freshness
+        finding.score_citation_validity = score.citation_validity
+        finding.score_verification_agreement = score.verification_agreement
+        finding.score_formula = score.formula
     validate_dependencies(state)
 
 
@@ -147,6 +160,14 @@ def merge_extraction(state: ResearchState, result: ClaimExtraction) -> None:
             ids[original] = existing.id
         else:
             item.id = f"E{max([int(e.id[1:]) for e in state.evidence if e.id[1:].isdigit()] or [0]) + 1}"
+            item.evidence_type = {
+                "supports": "supporting",
+                "contradicts": "contradicting",
+                "context": "contextual",
+            }[item.relation]
+            item.supports_claim = item.relation == "supports"
+            item.strength_score = 1.0 if item.strength == "direct" else .5
+            item.relevance_score = max(item.relevance_score, .5 if item.relation != "context" else .25)
             ids[original] = item.id
             state.evidence.append(item)
     aliases: dict[str, str] = {}
@@ -173,6 +194,12 @@ def merge_extraction(state: ResearchState, result: ClaimExtraction) -> None:
             audit(state, "claim", claim.claim, claim_id=claim.id)
     for claim, dependencies in pending:
         claim.depends_on = list(dict.fromkeys(claim.depends_on + [aliases.get(key, key.removeprefix("existing:")) for key in dependencies]))
+        for evidence_id in claim.evidence_ids:
+            evidence = next((item for item in state.evidence if item.id == evidence_id), None)
+            if evidence and evidence.claim_id is None:
+                evidence.claim_id = claim.id
+                source = next((item for item in state.sources if item.id == evidence.source_id), None)
+                evidence.freshness_score = source.freshness_score if source and source.freshness_score is not None else 0
     validate_evidence(state)
 
 

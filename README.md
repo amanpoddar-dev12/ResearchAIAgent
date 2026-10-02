@@ -1,19 +1,19 @@
 # AI Research Agent
 
-A modular Python CLI that plans research with Gemini, searches Tavily, extracts evidence, checks gaps and conflicts, and writes a cited Markdown report.
+A modular Python CLI that routes research tasks across Gemini, Groq, and Mistral, searches Tavily, extracts evidence, checks gaps and conflicts, and writes a cited Markdown report.
 
 ## Features
 
 - Pydantic models for plans, sources, findings, conflicts, and serializable state
 - Bounded iterative search with source URL deduplication
-- Separate Gemini, Tavily, and webpage adapters
+- Provider-agnostic Gemini, Groq, and Mistral HTTP adapters with task routing
 - Evidence-only claim extraction with webpage content treated as untrusted data
 - Markdown reports with numbered source links
 - Rich terminal progress and mocked pytest coverage
 
 ## Requirements
 
-Python 3.11+, a Gemini API key, and a Tavily API key.
+Python 3.11+, Gemini/Groq/Mistral API keys and model names, and a Tavily API key.
 
 ## Installation
 
@@ -24,13 +24,13 @@ pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
-Create `.env` from `.env.example`, then set `GEMINI_API_KEY`, `GEMINI_MODEL` to a model available to your Google AI Studio project and free tier, and `TAVILY_API_KEY`. Never commit `.env`.
+Create `.env` from `.env.example`, then set all provider keys and model names. Use a Gemini model available to your Google AI Studio project and free-tier Groq and Mistral model names available to your accounts. Set `LLM_TIMEOUT_SECONDS` and `LLM_MAX_RETRIES` for request resilience. Never commit `.env`.
 
 ## Configuration
 
-Set `GEMINI_MODEL` to a Gemini model available to your Google AI Studio project and free tier. Google controls the actual quota; `MAX_LLM_REQUESTS` is only this application's safety limit. The application validates the key, model name, and Tavily configuration without logging secrets.
+The routing table is centralized in `app/llm/routing.py`: planning and synthesis use Gemini; source extraction and gap analysis use Groq; independent final review uses Mistral except in Quick mode. Each task goes to exactly one provider. `MAX_LLM_REQUESTS` is this application's safety limit. The application validates all provider keys/model names, Tavily, timeout, and retry settings without logging secrets.
 
-Evidence extraction is batched across collected sources rather than making one Gemini request per search result. A normal run therefore uses a small fixed number of model calls for planning, evidence analysis, gap assessment, conflict detection, and synthesis.
+Evidence extraction is batched across collected sources rather than making one request per search result. A normal run uses a small fixed number of routed model calls for planning, evidence analysis, gap assessment, conflict detection, synthesis, and independent review.
 
 Use `python main.py --check-config` to validate local configuration without making a Gemini request.
 
@@ -54,7 +54,7 @@ Question -> Planner -> bounded Research Loop -> Tavily/Webpage
                          |-> Conflicts -> Synthesizer -> Report
 ```
 
-The `LLMClient` and `search_web` function are adapters, so the orchestration does not depend on the Gemini SDK directly.
+The routed `LLMClient` and `search_web` function are adapters, so orchestration does not depend on any provider SDK. Tavily remains the only web search provider.
 
 ## Limitations
 

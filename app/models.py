@@ -47,8 +47,20 @@ class Evidence(BaseModel):
     id: str
     source_id: str
     excerpt: str
+    claim_id: str | None = None
     relation: Literal["supports", "contradicts", "context"] = "context"
     strength: Literal["direct", "partial"] = "partial"
+    evidence_type: Literal["direct", "indirect", "supporting", "contradicting", "contextual"] = "contextual"
+    relevance_score: float = Field(default=0, ge=0, le=1)
+    strength_score: float = Field(default=0, ge=0, le=1)
+    freshness_score: float = Field(default=0, ge=0, le=1)
+    supports_claim: bool | None = None
+    reasoning: str = ""
+    source_location: str | None = None
+
+    @property
+    def quote(self) -> str:
+        return self.excerpt
 
 
 class CitationRejection(BaseModel):
@@ -127,16 +139,33 @@ class Source(BaseModel):
     url: str
     domain: str
     content: str
+    summary: str = ""
     publication_date: str | None = None
     source_type: str | None = None
     search_query: str | None = None
     credibility_notes: str | None = None
     quality: SourceQuality | None = None
+    relevance_score: float | None = Field(default=None, ge=0, le=1)
+    authority_score: float | None = Field(default=None, ge=0, le=1)
+    freshness_score: float | None = Field(default=None, ge=0, le=1)
+    quality_score_value: float | None = Field(default=None, ge=0, le=1)
     sub_question_ids: list[str] = Field(default_factory=list)
     aliases: list[str] = Field(default_factory=list)
     retrieved_at: str | None = None
     retrieval_method: Literal["search", "fetch"] | None = None
     model_config = ConfigDict(validate_assignment=True)
+
+    @property
+    def published_date(self) -> str | None:
+        return self.publication_date
+
+    @property
+    def quality_score(self) -> float | None:
+        return self.quality_score_value if self.quality_score_value is not None else self.quality.total if self.quality else None
+
+    @property
+    def quality_notes(self) -> list[str]:
+        return self.quality.notes if self.quality else []
 
 
 class Finding(BaseModel):
@@ -148,6 +177,18 @@ class Finding(BaseModel):
     id: str = ""
     evidence_ids: list[str] = Field(default_factory=list)
     evidence_status: EvidenceStatus = "Unverified"
+    importance: Literal["low", "medium", "high", "critical"] = "medium"
+    relevance: float = Field(default=0, ge=0, le=1)
+    confidence_score: float = Field(default=0, ge=0, le=1)
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
+    contradicting_evidence_ids: list[str] = Field(default_factory=list)
+    score_source_quality: float = Field(default=0, ge=0, le=1)
+    score_evidence_relevance: float = Field(default=0, ge=0, le=1)
+    score_source_agreement: float = Field(default=0, ge=0, le=1)
+    score_freshness: float = Field(default=0, ge=0, le=1)
+    score_citation_validity: float = Field(default=0, ge=0, le=1)
+    score_verification_agreement: float = Field(default=0, ge=0, le=1)
+    score_formula: str = ""
     comparison_item: str | None = None
     comparison_criterion: str | None = None
     depends_on: list[str] = Field(default_factory=list)
@@ -155,9 +196,35 @@ class Finding(BaseModel):
     dependency_rejected: bool = False
 
 
+class Verification(BaseModel):
+    claim_id: str
+    status: EvidenceStatus
+    supporting_count: int = Field(default=0, ge=0)
+    contradicting_count: int = Field(default=0, ge=0)
+    verified_by: list[str] = Field(default_factory=list)
+    reasoning: str = ""
+    confidence_score: float = Field(default=0, ge=0, le=1)
+    independent_review: str | None = None
+
+
 class ClaimExtraction(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     evidence: list[Evidence] = Field(default_factory=list)
+
+
+class DataPoint(BaseModel):
+    id: str = ""
+    source_id: str
+    label: str
+    value: float
+    unit: str = ""
+    observation: str
+    quote: str
+    estimated: bool = False
+
+
+class DataPointExtraction(BaseModel):
+    data_points: list[DataPoint] = Field(default_factory=list)
 
 
 class Conflict(BaseModel):
@@ -169,6 +236,74 @@ class Conflict(BaseModel):
     explanation: str
     claim_ids: list[str] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
+    severity: Literal["minor", "major"] = "major"
+    resolution: Literal["resolved", "unresolved"] = "unresolved"
+    resolution_basis: str | None = None
+    methodology_differences: list[str] = Field(default_factory=list)
+    publication_dates: list[str] = Field(default_factory=list)
+
+
+class ResearchGap(BaseModel):
+    gap_id: str
+    description: str
+    importance: Literal["low", "medium", "high"] = "medium"
+    reason: str
+    recommended_search: str
+
+
+class ReportSection(BaseModel):
+    id: str
+    title: str
+    content: str = ""
+
+
+class ChartSeries(BaseModel):
+    key: str
+    label: str
+    color: str | None = None
+
+
+class VisualProvenance(BaseModel):
+    """Verbatim support for one displayed row/cell, checked before publication."""
+
+    row: int = Field(ge=0)
+    key: str
+    evidence_id: str
+    quote: str
+    estimated: bool = False
+
+
+class ChartSpec(BaseModel):
+    id: str
+    type: Literal["line", "bar", "area", "pie", "scatter"]
+    title: str
+    caption: str
+    x_key: str = "name"
+    series: list[ChartSeries] = Field(default_factory=list)
+    data: list[dict[str, Any]] = Field(default_factory=list)
+    source_ids: list[str] = Field(default_factory=list)
+    section_id: str = "analysis"
+    provenance: list[VisualProvenance] = Field(default_factory=list)
+    origin: Literal["retrieved", "session"] = "retrieved"
+
+
+class TableSpec(BaseModel):
+    id: str
+    title: str
+    caption: str
+    columns: list[str] = Field(default_factory=list)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    source_ids: list[str] = Field(default_factory=list)
+    section_id: str = "analysis"
+    provenance: list[VisualProvenance] = Field(default_factory=list)
+    origin: Literal["retrieved", "session"] = "retrieved"
+
+
+class StructuredReport(BaseModel):
+    title: str = ""
+    sections: list[ReportSection] = Field(default_factory=list)
+    charts: list[ChartSpec] = Field(default_factory=list)
+    tables: list[TableSpec] = Field(default_factory=list)
 
 
 class ResearchState(BaseModel):
@@ -179,9 +314,11 @@ class ResearchState(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     conflicts: list[Conflict] = Field(default_factory=list)
     gaps: list[str] = Field(default_factory=list)
+    research_gaps: list[ResearchGap] = Field(default_factory=list)
     iteration: int = 0
     status: str = "created"
     final_report: str | None = None
+    structured_report: StructuredReport | None = None
     llm_requests_used: int = 0
     max_llm_requests: int = 10
     max_searches: int = 10
@@ -192,6 +329,8 @@ class ResearchState(BaseModel):
     mode: ModeName = "standard"
     filters: SourceFilters = Field(default_factory=SourceFilters)
     evidence: list[Evidence] = Field(default_factory=list)
+    data_points: list[DataPoint] = Field(default_factory=list)
+    verifications: list[Verification] = Field(default_factory=list)
     citation_rejections: list[CitationRejection] = Field(default_factory=list)
     filtered_sources: list[dict[str, str]] = Field(default_factory=list)
     max_parallel_tasks: int = 3
@@ -220,6 +359,57 @@ class GapAssessment(BaseModel):
     follow_up_queries: list[str] = Field(default_factory=list)
 
 
+class QuestionAnalysis(BaseModel):
+    refined_question: str
+    assumptions: list[str] = Field(default_factory=list)
+    ambiguities: list[str] = Field(default_factory=list)
+
+
+class SourceSummary(BaseModel):
+    source_id: str
+    summary: str
+    rationale: str = ""
+
+
+class Claim(BaseModel):
+    id: str
+    text: str
+    evidence_ids: list[str] = Field(min_length=1)
+    status: Literal["supported", "partially_supported", "unsupported", "contradicted", "unverified"]
+    confidence: float = Field(ge=0, le=1)
+
+
+class VerificationResult(BaseModel):
+    claim_id: str
+    verdict: Literal["confirmed", "weakened", "refuted", "insufficient_evidence"]
+    reasoning_summary: str
+    supporting_evidence_ids: list[str] = Field(default_factory=list)
+    issues: list[str] = Field(default_factory=list)
+
+
+class VerificationBatch(BaseModel):
+    results: list[VerificationResult] = Field(default_factory=list)
+
+
+class ReviewItem(BaseModel):
+    claim_id: str
+    issues: list[str] = Field(default_factory=list)
+    reasoning: str = ""
+
+
+class ReviewBatch(BaseModel):
+    reviews: list[ReviewItem] = Field(default_factory=list)
+
+
+class ConflictRecord(BaseModel):
+    id: str
+    claim_ids: list[str] = Field(min_length=1)
+    description: str
+    severity: Literal["minor", "major"]
+    resolution: Literal["resolved", "unresolved"]
+    resolution_basis: str | None = None
+
+
 class ConflictAssessment(BaseModel):
     conflicts: list[Conflict] = Field(default_factory=list)
 
@@ -231,3 +421,15 @@ class ReportDraft(BaseModel):
     detailed_analysis: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
     conclusion: str
+    abstract: str = ""
+    introduction: str = ""
+    methodology: str = ""
+    background_review: str = ""
+    timeline: str = ""
+    comparative_analysis: str = ""
+    discussion: str = ""
+    future_directions: str = ""
+    references: str = ""
+    sections: list[ReportSection] = Field(default_factory=list)
+    charts: list[ChartSpec] = Field(default_factory=list)
+    tables: list[TableSpec] = Field(default_factory=list)

@@ -44,3 +44,48 @@ export function researchCoverage(state: ResearchState): DerivedMetric {
   if (!decision || typeof decision.coverage !== "number") return { value: null, factors: [], formula: "Not available: no stop-decision coverage was reported." };
   return { value: decision.coverage, factors: [{ label: "Stop decision", value: decision.reason }], formula: "Use the latest backend-reported stop-decision coverage." };
 }
+
+export function evidenceCount(state: ResearchState): DerivedMetric {
+  const value = state.evidence?.length;
+  if (value === undefined) return { value: null, factors: [], formula: "Not available: evidence is not present in the research state." };
+  return countMetric(value, [{ label: "Evidence items", value: String(value) }], "Count evidence items reported in the research state.");
+}
+
+export function citationCoverage(state: ResearchState): DerivedMetric {
+  if (!state.findings.length) return { value: 0, factors: [{ label: "Findings", value: "0" }], formula: "No findings were reported, so citation coverage is 0%." };
+  const cited = state.findings.filter((finding) => finding.source_ids.length > 0 && (finding.evidence_ids?.length || finding.supporting_evidence_ids?.length || finding.contradicting_evidence_ids?.length)).length;
+  return {
+    value: cited / state.findings.length,
+    factors: [{ label: "Cited findings", value: `${cited}/${state.findings.length}` }],
+    formula: "Cited findings divided by total findings; a cited finding still requires evidence validation.",
+  };
+}
+
+function average(values: number[]): number | null {
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+}
+
+export function evidenceCoverage(state: ResearchState): DerivedMetric {
+  if (!state.findings.length) return { value: 0, factors: [{ label: "Findings", value: "0" }], formula: "No findings were reported, so evidence coverage is 0%." };
+  const covered = state.findings.filter((finding) => Math.max(finding.evidence_ids?.length ?? 0, finding.supporting_evidence_ids?.length ?? 0, finding.contradicting_evidence_ids?.length ?? 0) > 0).length;
+  return { value: covered / state.findings.length, factors: [{ label: "Findings with linked evidence", value: `${covered}/${state.findings.length}` }], formula: "Findings with at least one linked evidence item divided by total findings." };
+}
+
+export function averageSourceQuality(sources: ResearchSource[]): DerivedMetric {
+  const values = sources.map((source) => source.quality?.total).filter((value): value is number => typeof value === "number");
+  const value = average(values);
+  return { value, factors: [{ label: "Scored sources", value: String(values.length) }], formula: "Average of reported source quality scores; unscored sources are excluded." };
+}
+
+export function sourceDiversity(sources: ResearchSource[]): DerivedMetric {
+  if (!sources.length) return { value: 0, factors: [{ label: "Sources", value: "0" }], formula: "No sources were reported." };
+  const domains = new Set(sources.map((source) => source.domain).filter(Boolean)).size;
+  const types = new Set(sources.map((source) => source.source_type).filter(Boolean)).size;
+  const value = Math.min(1, (domains / sources.length + types / sources.length) / 2);
+  return { value, factors: [{ label: "Unique domains", value: String(domains) }, { label: "Source types", value: String(types) }], formula: "Estimated diversity = average of unique-domain ratio and unique-source-type ratio. It is not a correctness score." };
+}
+
+export function freshness(sources: ResearchSource[]): DerivedMetric {
+  const values = sources.map((source) => source.quality?.freshness).filter((value): value is number => typeof value === "number");
+  return { value: average(values), factors: [{ label: "Scored sources", value: String(values.length) }], formula: "Average of reported source freshness scores; sources without freshness scores are excluded." };
+}
