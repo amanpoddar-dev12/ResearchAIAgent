@@ -1,19 +1,23 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { Minus, Plus, RotateCcw } from "lucide-react";
 import type { ResearchGraphData, ResearchSource } from "../types/research";
 
-const columns = ["question", "claim", "evidence", "source", "conflict"];
+const columns = ["question", "sub_question", "claim", "evidence", "source", "conflict"];
 export function ResearchGraph({ graph, sources, onPreview }: { graph: ResearchGraphData; sources: ResearchSource[]; onPreview: (source: ResearchSource) => void }) {
   const [selected, setSelected] = useState<string | null>(null);
+  const [scale, setScale] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const drag = useRef<{ x: number; y: number } | null>(null);
   const groups = columns.map((type) => graph.nodes.filter((node) => node.type === type));
+  const graphWidth = columns.length * 220 + 10;
   const positions = new Map(groups.flatMap((nodes, column) => nodes.map((node, row) => [node.id, { x: column * 220 + 10, y: row * 80 + 40 }] as const)));
   const height = Math.max(150, ...groups.map((nodes) => nodes.length * 80 + 60));
   const node = graph.nodes.find((item) => item.id === selected);
   const connected = graph.edges.filter((edge) => edge.source === selected || edge.target === selected);
   return <section className="card min-w-0" aria-label="Research evidence graph">
-    <h2 className="text-lg font-semibold">Research graph</h2>
-    <p className="mt-1 text-xs text-slate-500">Select a node to inspect its evidence path. Dashed edges indicate claim dependencies.</p>
-    <div className="mt-4 max-h-[480px] overflow-auto rounded-lg border border-slate-200 dark:border-slate-700">
-      <svg width="1110" height={height} role="group" aria-label="Question to claims, evidence, sources and conflicts" className="text-slate-700 dark:text-slate-200">
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-lg font-semibold">Research graph</h2><p className="mt-1 text-xs text-slate-500">Select a node to inspect its evidence path. Drag to pan; use controls to zoom.</p></div><div className="flex gap-1" role="group" aria-label="Graph controls"><button className="icon-button" aria-label="Zoom out" onClick={() => setScale((value) => Math.max(0.6, value - 0.1))}><Minus size={15} /></button><button className="icon-button" aria-label="Reset graph view" onClick={() => { setScale(1); setOffset({ x: 0, y: 0 }); }}><RotateCcw size={15} /></button><button className="icon-button" aria-label="Zoom in" onClick={() => setScale((value) => Math.min(1.8, value + 0.1))}><Plus size={15} /></button></div></div>
+    <div className="mt-4 max-h-[480px] overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700" onPointerDown={(event) => { drag.current = { x: event.clientX - offset.x, y: event.clientY - offset.y }; event.currentTarget.setPointerCapture(event.pointerId); }} onPointerMove={(event) => { if (drag.current) setOffset({ x: event.clientX - drag.current.x, y: event.clientY - drag.current.y }); }} onPointerUp={() => { drag.current = null; }}>
+      <svg width={graphWidth} height={height} role="group" aria-label="Question to claims, evidence, sources and conflicts" className="text-slate-700 dark:text-slate-200" style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`, transformOrigin: "top left" }}>
         <defs><marker id="graph-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" /></marker></defs>
         {columns.map((type, column) => <text key={type} x={column * 220 + 10} y={20} fill="currentColor" fontSize="12">{type.toUpperCase()}</text>)}
         {graph.edges.map((edge, index) => {

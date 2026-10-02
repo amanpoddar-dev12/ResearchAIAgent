@@ -3,8 +3,19 @@
 import logging
 import json
 import re
-from app.llm import LLMClient
-from app.models import ConflictAssessment, ReportDraft, ResearchState
+from app.llm import LLMClient, invoke_structured
+from app.llm.routing import CONFLICT_ANALYSIS, FINAL_SYNTHESIS
+from app.models import (
+    ChartSpec,
+    ConflictAssessment,
+    DataPoint,
+    ReportDraft,
+    ReportSection,
+    ResearchState,
+    StructuredReport,
+    TableSpec,
+    VisualProvenance,
+)
 from app.prompts import CONFLICT_DETECTION, SYNTHESIS
 from app.modes import MODES
 from app.evidence import reject, source_rejection
@@ -17,18 +28,19 @@ class Synthesizer:
         self.llm = llm
 
     def detect_conflicts(self, state: ResearchState) -> ConflictAssessment:
-        return self.llm.generate_structured(
-            CONFLICT_DETECTION.format(findings=state.findings), ConflictAssessment
+        return invoke_structured(
+            self.llm, CONFLICT_DETECTION.format(findings=state.findings), ConflictAssessment, task=CONFLICT_ANALYSIS
         )
 
     def draft(self, state: ResearchState) -> ReportDraft:
         try:
-            return self.llm.generate_structured(
+            return invoke_structured(
+                self.llm,
                 SYNTHESIS.format(
                     question=state.question.question, plan=state.plan, sources=[source.model_dump(exclude={"content"}) for source in state.sources],
-                    findings=state.findings, conflicts=state.conflicts, gaps=state.gaps,
+                    findings=state.findings, conflicts=state.conflicts, gaps=state.gaps, evidence=state.evidence,
                 ) + f"\nMode: {MODES[state.mode].strategy}\nValidated excerpts: {state.evidence}\nRespect derived evidence_status; do not upgrade unverified claims.",
-                ReportDraft,
+                ReportDraft, task=FINAL_SYNTHESIS,
             )
         except (RuntimeError, ValueError) as exc:
             logger.warning("Using evidence-only fallback report: %s", exc)
@@ -45,7 +57,436 @@ class Synthesizer:
             )
 
 
+SECTION_TITLES = (
+    ("abstract", "Title and Abstract"),
+    ("executive-summary", "Executive Summary"),
+    ("introduction", "Introduction and Research Questions"),
+    ("methodology", "Methodology"),
+    ("background", "Literature / Background Review"),
+    ("analysis", "Detailed Analysis"),
+    ("timeline", "Year-by-Year Progress / Timeline"),
+    ("comparison", "Comparative Analysis"),
+    ("discussion", "Discussion"),
+    ("conclusion", "Conclusion and Future Directions"),
+    ("references", "References"),
+)
+CITATION = re.compile(r"\[((?:S\d+|\d+)(?:\s*[,;]\s*(?:S\d+|\d+))*)\]")
+
+
+def _report_evidence(state: ResearchState):
+    """Recheck the evidence boundary, including for older deserialized sessions."""
+    sources = {source.id: source for source in state.sources}
+    evidence = {}
+    for item in state.evidence:
+        reason = source_rejection(state, item.source_id)
+        source = sources.get(item.source_id)
+        if not reason and (not item.excerpt or item.excerpt not in source.content):
+            reason = "Excerpt is not present in collected source text"
+        if reason:
+            reject(state, "report", reason, item.source_id, item.id)
+        else:
+            evidence[item.id] = item
+    return evidence
+
+
+def _normal_text(text: str) -> str:
+    return " ".join(re.sub(r"[*_`\"“”]", "", text).casefold().split()).strip(" .!?;:—–-'")
+
+
+def _report_prose(text: str, state: ResearchState, evidence, numbers: dict[str, str]) -> str:
+    """Citations alone do not prove a new assertion: retain traceable sentences only."""
+    if not text.strip():
+        return ""
+    facts = [(item.excerpt, {item.source_id}) for item in evidence.values() if item.relation == "supports"]
+    facts.extend((finding.claim, {evidence[key].source_id for key in finding.evidence_ids if key in evidence})
+                 for finding in state.findings if finding.evidence_status == "Supported")
+    accepted = []
+    for paragraph in re.split(r"\n\s*\n", text):
+        sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z\"“])|\n(?=[-*]\s)", paragraph.strip())
+        validated = []
+        for sentence in sentences:
+            if not sentence.strip():
+                continue
+            tokens = [token.strip() for match in CITATION.findall(sentence) for token in re.split(r"[,;]", match)]
+            ids = {token if token.startswith("S") else next((key for key, value in numbers.items() if value == token), token) for token in tokens}
+            candidate = re.sub(r"^(?:[-*>]\s*|#{1,6}\s*)", "", CITATION.sub("", sentence)).strip()
+            if re.search(r"https?://|\]\(", sentence) or not ids or not ids <= set(numbers):
+                reject(state, "report", "Uncited or invalidly cited report assertion removed")
+                continue
+            supported = any(_normal_text(candidate) == _normal_text(fact) and ids <= supporting for fact, supporting in facts)
+            if not supported:
+                reject(state, "report", "Report assertion does not match a validated claim or excerpt")
+                continue
+            validated.append(candidate.rstrip(".") + ". " + " ".join(f"[{numbers[sid]}]" for sid in numbers if sid in ids))
+        if validated:
+            accepted.append(" ".join(validated))
+    return "\n\n".join(accepted)
+
+
+def _cell_occurs(value, quote: str) -> bool:
+    """Match numeric tokens exactly; never let 20 match 2020 or 12 match 12.5."""
+    if isinstance(value, bool) or value is None or isinstance(value, (list, dict)):
+        return False
+    if isinstance(value, (int, float)):
+        import math
+        from decimal import Decimal, InvalidOperation
+        if not math.isfinite(value):
+            return False
+        for token in re.findall(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?(?![\w.])", quote):
+            try:
+                if Decimal(token.replace(",", "")) == Decimal(str(value)):
+                    return True
+            except InvalidOperation:
+                pass
+        return False
+    return bool(str(value).strip()) and re.search(r"(?<!\w)" + re.escape(str(value).strip()) + r"(?!\w)", quote, re.IGNORECASE) is not None
+
+
+def _metric_matches(value, label: str, row_label, quote: str) -> bool:
+    """Reject swaps between metrics/units, even when both numbers occur in a quote."""
+    from decimal import Decimal, InvalidOperation
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return True
+    numeric = []
+    for match in re.finditer(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?(?![\w.])", quote):
+        try:
+            number = Decimal(match.group().replace(",", ""))
+            if str(row_label).isdigit() and number == Decimal(str(row_label)):
+                continue
+            numeric.append((number, match.start(), match.end()))
+        except InvalidOperation:
+            pass
+    generic = {"value", "values", "count", "measurement", "measurements", "year", "item", "category"}
+    terms = [term for term in re.findall(r"\w+|%", label.casefold()) if term not in generic]
+    expected = Decimal(str(value))
+    if not terms:
+        return {number for number, _, _ in numeric} == {expected}
+    for term in terms:
+        mentions = list(re.finditer(r"(?<!\w)" + re.escape(term) + r"(?!\w)", quote, re.IGNORECASE))
+        nearest = []
+        for mention in mentions:
+            distances = [(max(start - mention.end(), mention.start() - end, 0), number) for number, start, end in numeric]
+            if distances:
+                distance = min(pair[0] for pair in distances)
+                nearest.extend(number for gap, number in distances if gap == distance)
+        if set(nearest) != {expected}:
+            return False
+    return True
+
+
+def _validated_visual(spec, state: ResearchState, evidence, section_ids: set[str]):
+    """Require a verbatim, cited provenance record for every displayed cell."""
+    is_chart = isinstance(spec, ChartSpec)
+    rows = spec.data if is_chart else spec.rows
+    keys = [spec.x_key] + [series.key for series in spec.series] if is_chart else spec.columns
+    if not rows or not keys or len(set(keys)) != len(keys) or (is_chart and not spec.series):
+        reject(state, "report", "Visual omitted: missing or duplicate data columns", evidence_id=spec.id)
+        return None
+    if not spec.source_ids or any(source_rejection(state, sid) or not any(item.source_id == sid for item in evidence.values()) for sid in spec.source_ids):
+        reject(state, "report", "Visual omitted: unknown, irrelevant or untraceable source", evidence_id=spec.id)
+        return None
+    valid_rows, provenance, used_sources = [], [], []
+    estimated = False
+    labels = {series.key: series.label for series in spec.series} if is_chart else {key: key for key in keys[1:]}
+    for row_index, row in enumerate(rows):
+        cell_records = []
+        for key in keys:
+            value = row.get(key)
+            record = next((record for record in spec.provenance if record.row == row_index and record.key == key), None)
+            item = evidence.get(record.evidence_id) if record else None
+            numeric = not is_chart or key == spec.x_key or (isinstance(value, (int, float)) and not isinstance(value, bool))
+            if not item or item.source_id not in spec.source_ids or not record.quote or record.quote not in item.excerpt or not numeric or not _cell_occurs(value, record.quote):
+                break
+            # A value and its row label must occur together, not in unrelated excerpts.
+            if not _cell_occurs(row.get(keys[0]), record.quote):
+                break
+            if any(other.get(keys[0]) != row.get(keys[0]) and _cell_occurs(other.get(keys[0]), record.quote) for other in rows):
+                break  # A quote spanning multiple observations cannot establish this association.
+            if key in labels:
+                label_tokens = re.findall(r"\w+|%", labels[key].casefold())
+                generic = {"value", "values", "count", "measurement", "measurements", "year", "item", "category"}
+                if any(not _cell_occurs(token, record.quote) for token in label_tokens if token not in generic):
+                    break  # A real value must not be relabelled as an unrelated metric or unit.
+                if not _metric_matches(value, labels[key], row.get(keys[0]), record.quote):
+                    break
+            if is_chart and spec.type == "scatter" and not isinstance(row.get(spec.x_key), (int, float)):
+                break
+            if is_chart and spec.type == "pie" and key != spec.x_key and value < 0:
+                break
+            # Explicit estimates remain estimates even if the model forgets the flag.
+            is_estimated = record.estimated or bool(re.search(r"\bestimat(?:e|ed|ion)\b|\bapproximately\b|\babout\s+\d", record.quote, re.IGNORECASE))
+            cell_records.append(record.model_copy(update={"row": len(valid_rows), "estimated": is_estimated}))
+        if len(cell_records) != len(keys):
+            reject(state, "report", "Visual row omitted: displayed value lacks matching retrieved evidence", evidence_id=f"{spec.id}:{row_index}")
+            continue
+        valid_rows.append({key: row[key] for key in keys})
+        provenance.extend(cell_records)
+        estimated = estimated or any(record.estimated for record in cell_records)
+        used_sources.extend(evidence[record.evidence_id].source_id for record in cell_records)
+    minimum = 2 if is_chart and spec.type in {"line", "area", "scatter"} else 1
+    if len(valid_rows) < minimum:
+        reject(state, "report", "Visual omitted: insufficient verified observations", evidence_id=spec.id)
+        return None
+    section_id = spec.section_id if spec.section_id in section_ids - {"references"} else "comparison"
+    if is_chart and ("year" in spec.x_key.lower() or spec.section_id == "timeline"):
+        if not all(str(row[spec.x_key]).isdigit() and 1000 <= int(row[spec.x_key]) <= 9999 for row in valid_rows):
+            reject(state, "report", "Timeline omitted: year labels are not verified four-digit years", evidence_id=spec.id)
+            return None
+        section_id = "timeline"
+        ordered = sorted(enumerate(valid_rows), key=lambda pair: int(pair[1][spec.x_key]))
+        remap = {old: new for new, (old, _) in enumerate(ordered)}
+        valid_rows = [row for _, row in ordered]
+        provenance = [record.model_copy(update={"row": remap[record.row]}) for record in provenance]
+    # Captions describe the validation method, not unchecked model interpretations.
+    caption = "Values transcribed from the cited retrieved excerpts; missing observations are omitted."
+    if estimated:
+        caption += " Values described as estimated in the evidence are estimated, not observed measurements."
+    display_labels = [series.label for series in spec.series] if is_chart else spec.columns
+    if any(re.search(r"https?://|[\r\n]", label) for label in display_labels):
+        reject(state, "report", "Visual omitted: invalid display label", evidence_id=spec.id)
+        return None
+    return spec.model_copy(update={"data" if is_chart else "rows": valid_rows, "source_ids": list(dict.fromkeys(used_sources)),
+        "provenance": provenance, "origin": "retrieved", "section_id": section_id,
+        "title": ("Year-by-year " if section_id == "timeline" else "Retrieved comparison: ") + ", ".join(display_labels), "caption": caption})
+
+
+def _report_visuals(draft: ReportDraft, state: ResearchState, evidence):
+    charts, tables = [], []
+    seen = set()
+    for spec in [*draft.charts, *draft.tables]:
+        if spec.id in seen or spec.id in {"source-quality-breakdown", "evidence-status-breakdown", "evidence-status-summary"}:
+            reject(state, "report", "Duplicate or reserved visual ID removed", evidence_id=spec.id)
+            continue
+        seen.add(spec.id)
+        validated = _validated_visual(spec, state, evidence, {key for key, _ in SECTION_TITLES})
+        if validated:
+            (charts if isinstance(validated, ChartSpec) else tables).append(validated)
+    grouped: dict[str, list[DataPoint]] = {}
+    for point in state.data_points:
+        if any(item.source_id == point.source_id and point.quote in item.excerpt for item in evidence.values()):
+            grouped.setdefault(f"{point.label}|{point.unit}", []).append(point)
+    for group, points in grouped.items():
+        observations = list(dict.fromkeys(point.observation for point in points))
+        if len(observations) < 2:
+            continue
+        label, unit = group.split("|", 1)
+        ordered = sorted(points, key=lambda point: int(point.observation) if point.observation.isdigit() else point.observation)
+        provenance = []
+        rows = []
+        for point in ordered:
+            evidence_item = next((item for item in evidence.values() if item.source_id == point.source_id and point.quote in item.excerpt), None)
+            if not evidence_item:
+                continue
+            row_index = len(rows)
+            rows.append({"observation": int(point.observation) if point.observation.isdigit() else point.observation, "value": point.value})
+            provenance.extend([
+                VisualProvenance(row=row_index, key="observation", evidence_id=evidence_item.id, quote=point.quote, estimated=point.estimated),
+                VisualProvenance(row=row_index, key="value", evidence_id=evidence_item.id, quote=point.quote, estimated=point.estimated),
+            ])
+        if len(rows) < 2:
+            continue
+        is_timeline = all(isinstance(row["observation"], int) and 1000 <= row["observation"] <= 9999 for row in rows)
+        generated = ChartSpec(
+            id=f"extracted-{re.sub(r'[^a-z0-9]+', '-', group.casefold()).strip('-')}",
+            type="line" if is_timeline else "bar",
+            title=("Year-by-year " if is_timeline else "") + label + (f" ({unit})" if unit else ""),
+            caption="Source-backed observations extracted in parallel from relevant retrieved sources; missing observations are omitted.",
+            x_key="observation", series=[{"key": "value", "label": label + (f" ({unit})" if unit else "")}],
+            data=rows, source_ids=list(dict.fromkeys(point.source_id for point in ordered)),
+            provenance=provenance, origin="retrieved", section_id="timeline" if is_timeline else "comparison",
+        )
+        validated = _validated_visual(generated, state, evidence, {key for key, _ in SECTION_TITLES})
+        if validated and validated.id not in seen:
+            seen.add(validated.id)
+            charts.append(validated)
+    # A verified timeline chart supplies its exact table; no new data is inferred.
+    for chart in [chart for chart in charts if chart.section_id == "timeline"]:
+        if any(table.section_id == "timeline" for table in tables):
+            break
+        tables.append(TableSpec(id=chart.id + "-table", title=chart.title + " — data table", caption=chart.caption,
+            columns=[chart.x_key] + [series.key for series in chart.series], rows=chart.data,
+            source_ids=chart.source_ids, provenance=chart.provenance, section_id="timeline"))
+    quality_sources = [source for source in state.sources if source.quality]
+    if quality_sources:
+        charts.append(ChartSpec(id="source-quality-breakdown", type="bar", title="Source quality indicators",
+            caption="Session diagnostic: system-computed heuristic percentages, not measurements from sources or probabilities of truth.",
+            x_key="source", series=[{"key": "relevance", "label": "Relevance (%)"}, {"key": "authority", "label": "Authority (%)"}, {"key": "freshness", "label": "Freshness (%)"}],
+            data=[{"source": source.id, "relevance": round(source.quality.relevance * 100, 1), "authority": round(source.quality.authority * 100, 1), "freshness": round(source.quality.freshness * 100, 1)} for source in quality_sources],
+            source_ids=[source.id for source in quality_sources], origin="session", section_id="methodology"))
+    status_counts = {}
+    for finding in state.findings:
+        status_counts[finding.evidence_status] = status_counts.get(finding.evidence_status, 0) + 1
+    status_source_ids = {source_id for finding in state.findings for source_id in finding.source_ids}
+    if status_counts and status_source_ids:
+        ids = [source.id for source in state.sources if source.id in status_source_ids]
+        charts.append(ChartSpec(id="evidence-status-breakdown", type="bar", title="Evidence status distribution",
+            caption="Session diagnostic: counts of findings by current validated status, not prevalence estimates or source-reported statistics.",
+            x_key="status", series=[{"key": "count", "label": "Findings"}], data=[{"status": status, "count": count} for status, count in status_counts.items()],
+            source_ids=ids, origin="session", section_id="discussion"))
+        tables.append(TableSpec(id="evidence-status-summary", title="Evidence status summary", caption="Session diagnostic: finding counts calculated from this session's claim records; references identify the reviewed evidence.",
+            columns=["Status", "Findings"], rows=[{"Status": status, "Findings": count} for status, count in status_counts.items()], source_ids=ids,
+            origin="session", section_id="discussion"))
+    return charts, tables
+
+
+def build_structured_report(draft: ReportDraft, state: ResearchState) -> StructuredReport:
+    evidence = _report_evidence(state)
+    cited_ids = {item.source_id for item in evidence.values()}
+    numbers = {source.id: str(index) for index, source in enumerate(state.sources, 1) if source.id in cited_ids}
+    sources = {source.id: source for source in state.sources if source.id in numbers}
+    findings = [finding for finding in state.findings if any(key in evidence for key in finding.evidence_ids)]
+    supported = [finding for finding in findings if finding.evidence_status in {"Supported", "Partially Supported"}]
+    charts, tables = _report_visuals(draft, state, evidence)
+    def refs(ids):
+        return " ".join(f"[{numbers[sid]}]" for sid in dict.fromkeys(ids) if sid in numbers)
+    def claim_text(finding):
+        return finding.claim.rstrip(".") + ". " + refs(evidence[key].source_id for key in finding.evidence_ids if key in evidence)
+    def safe_label(text):
+        return re.sub(r"https?://[^\s<>]+", "[URL omitted]", text).replace("\n", " ")
+    verified_points = [f"- {claim_text(finding)} **{finding.evidence_status}.**" for finding in supported[:8]]
+    summary = "\n".join(verified_points) or "No traceable supporting findings were established. The research question remains Unverified."
+    if len(verified_points) < 5:
+        summary += f"\n\nOnly {len(verified_points)} traceable supporting finding(s) were available; additional conclusions are not inferred to meet a bullet-count target."
+    abstract = (f"This report examines the question: {safe_label(state.question.question)}. It presents an evidence-bounded synthesis of the current research session, "
+        f"drawing on {len(sources)} source(s) with traceable excerpts and {len(findings)} linked claim record(s). Findings are distinguished by their support status, and unresolved questions are retained explicitly.")
+    if supported:
+        abstract += "\n\n" + " ".join(claim_text(finding) for finding in supported[:3])
+    abstract += "\n\nThe review is limited to the retrieved material; it does not establish exhaustive coverage, causal effects, or consensus beyond that evidence."
+    questions = state.plan.sub_questions if state.plan and state.plan.sub_questions else [state.question.refined_question or state.question.question]
+    introduction = "The purpose of this review is to assemble and critically examine the evidence relevant to the following research questions. They define the scope of inquiry and are not treated as established findings.\n\n" + "\n".join(f"- {safe_label(question)}" for question in questions)
+    if state.question.assumptions:
+        introduction += "\n\nScope assumptions: " + "; ".join(safe_label(value) for value in state.question.assumptions)
+    mode = MODES[state.mode]
+    methodology = (f"Mode: {mode.label}. {mode.strategy}\n\n"
+        f"Filters applied: {json.dumps(state.filters.model_dump(mode='json'), ensure_ascii=False)}\n\n"
+        f"Source count: {len(state.sources)} retained; {len(state.filtered_sources)} excluded; {len(sources)} with traceable evidence. "
+        f"The session performed {state.searches_performed} search(es) across {state.iteration} iteration(s).\n\n"
+        f"Budgets: {state.max_searches} searches; {state.max_sources} sources; {state.max_iterations} iterations; {state.max_parallel_tasks} parallel tasks; {state.max_wall_seconds:g} seconds.\n\n"
+        "Source quality was assessed using relevance, authority, freshness, source type and evidence strength. "
+        f"Mode-specific weights: {json.dumps(mode.weights.model_dump())}. The minimum citation relevance was {mode.relevance_threshold:.0%}. "
+        "These scores are heuristic indicators, not calibrated probabilities of truth. Unknown dates cannot establish recency.\n\n"
+        "Claims were linked to evidence identifiers and source identifiers. Each retained excerpt was checked against the collected source text; nonexistent, irrelevant, untraceable and unsupported citations were excluded. "
+        "Support, contradiction and uncertainty remain distinct. Dependency checks prevent a claim from receiving stronger support than its prerequisite evidence permits. "
+        "Model assessments and heuristic scores require human interpretation; they do not constitute independent replication.\n\n"
+        "Quantitative visuals include only values with verbatim evidence for their displayed cells. Missing observations are omitted rather than interpolated. "
+        "Charts marked as session diagnostics describe the research process and are not measurements reported by the sources.")
+    queries = list(dict.fromkeys(source.search_query for source in state.sources if source.search_query))
+    if queries:
+        methodology += "\n\nSearch queries represented in retained sources:\n" + "\n".join(f"- {safe_label(query)}" for query in queries)
+    if sources:
+        methodology += "\n\nReviewed source corpus: " + "; ".join(f"{safe_label(source.title)} {refs([source.id])}" for source in sources.values()) + "."
+    background = "The background review is restricted to the material available in this session. Source-specific observations are presented separately so that differences in coverage are not mistaken for agreement."
+    for source in sources.values():
+        related = [finding for finding in supported if any(evidence[key].source_id == source.id for key in finding.evidence_ids if key in evidence)]
+        background += f"\n\n### {safe_label(source.title)}\n\n"
+        background += " ".join(claim_text(finding) for finding in related) if related else "> " + next(item.excerpt for item in evidence.values() if item.source_id == source.id) + " " + refs([source.id])
+        background += f"\n\nSource metadata: {source.source_type or 'unspecified type'}; publication date {source.publication_date or 'not reported'}. {refs([source.id])} This metadata describes the retrieved record and does not establish the quality of its study design."
+    analysis = []
+    for finding in findings:
+        linked = [evidence[key] for key in finding.evidence_ids if key in evidence]
+        paragraph = f"### Claim {finding.id}: {finding.evidence_status}\n\n"
+        if finding.evidence_status == "Supported":
+            paragraph += claim_text(finding)
+        else:
+            paragraph += f"**Claim under assessment ({finding.evidence_status}):** {claim_text(finding)} This statement is not presented as an established conclusion."
+        paragraph += "\n\nThe evidence trail for this assessment is reproduced below. Excerpts retain their original wording so that the scope of support can be inspected directly."
+        for item in linked:
+            paragraph += f"\n\n> {item.excerpt.replace(chr(10), ' ')} {refs([item.source_id])}\n\nEvidence {item.id} → Source {item.source_id}; relation: {item.relation}; strength: {item.strength}. {refs([item.source_id])}"
+        paragraph += "\n\nInterpretive boundary: this evidence supports assessment of the stated claim only. It does not establish an unstated population, timeframe, mechanism, or causal interpretation."
+        if finding.depends_on:
+            paragraph += " The claim depends on " + ", ".join(finding.depends_on) + "; its status is conditional on those prerequisite assessments."
+        analysis.append(paragraph)
+    detailed = "\n\n".join(analysis) or "No claim had a traceable evidence chain. A substantive analysis cannot be supported by the current session."
+    timeline = ("The accompanying timeline reports only dated quantitative observations explicitly present in the retrieved excerpts. Years and values are retained together; omitted years denote missing evidence, not zero values or continuity."
+        if any(chart.section_id == "timeline" and chart.origin == "retrieved" for chart in charts)
+        else "The retrieved evidence did not provide a validated series of dated quantitative observations. A year-by-year trend cannot be established. Publication dates alone are not treated as progress measurements; no missing years or values have been invented.")
+    comparison = ("The comparison uses the explicitly cited observations shown below. Differences should be interpreted only within the definitions and conditions stated by those sources; common units do not by themselves establish comparable methods."
+        if any(item.section_id == "comparison" and item.origin == "retrieved" for item in [*charts, *tables])
+        else "The current evidence does not establish a quantitatively comparable dataset. No numerical ranking or comparison is inferred from incompatible or absent measurements.")
+    if state.mode == "compare" and state.question.comparison_items:
+        def cell(value):
+            return value.replace("|", "\\|").replace("\n", " ")
+        items = state.question.comparison_items
+        criteria = list(dict.fromkeys(finding.comparison_criterion for finding in findings if finding.comparison_criterion)) or ["Available evidence"]
+        comparison += "\n\n| Criterion | " + " | ".join(cell(item) for item in items) + " |\n| --- | " + " | ".join("---" for _ in items) + " |"
+        for criterion in criteria:
+            values = []
+            for item in items:
+                matches = [finding for finding in findings if finding.comparison_item == item and finding.comparison_criterion == criterion]
+                values.append("; ".join(cell(claim_text(finding) + f" ({finding.evidence_status})") for finding in matches) or "Unverified — no linked evidence")
+            comparison += "\n| " + cell(criterion) + " | " + " | ".join(values) + " |"
+        comparison = "### Claim-level comparison\n\n" + comparison
+    discussion = "### Implications\n\nThe evidence should be interpreted at the scope of each cited claim. Supporting excerpts establish traceability; they do not alone resolve study quality, selection effects, or transferability to settings not examined by the sources.\n\n### Conflicting evidence\n\n"
+    conflict_items = []
+    for conflict in state.conflicts:
+        linked = [evidence[key] for key in conflict.evidence_ids if key in evidence]
+        if not linked:
+            linked = [item for item in evidence.values() if item.source_id in conflict.source_a + conflict.source_b]
+        if linked:
+            conflict_items.append("The session identified an unresolved disagreement in the following evidence:\n\n" + "\n\n".join("> " + item.excerpt.replace("\n", " ") + " " + refs([item.source_id]) for item in linked))
+    discussion += "\n\n".join(conflict_items) or "No traceable conflict was identified in the session; this absence does not establish consensus."
+    discussion += "\n\n### Limitations\n\nCoverage is bounded by the selected mode, filters, budgets and material retrieved during this session. Single-source findings and incomplete evidence must not be generalized beyond their documented scope."
+    limits = list(dict.fromkeys(state.gaps + state.unresolved_questions))
+    if limits:
+        discussion += "\n\nUnresolved research questions (not established findings):\n" + "\n".join("- " + safe_label(limit) for limit in limits)
+    for decision in state.stop_decisions:
+        if decision.stop:
+            discussion += f"\n\nStopped: {decision.reason}. Unresolved: " + ("; ".join(safe_label(value) for value in decision.unresolved) or "none recorded") + "."
+    conclusion = "The conclusions of this review are bounded by the linked evidence and retain the session's uncertainty assessments."
+    if supported:
+        conclusion += "\n\n" + " ".join(claim_text(finding) for finding in supported[:3])
+    else:
+        conclusion += " No supported substantive conclusion is available; the research question remains Unverified."
+    conclusion += "\n\nFuture work should address the documented unresolved questions, seek independent primary evidence for singly supported claims, and compare explicitly matched definitions and measurement conditions before extending these conclusions. This is a research agenda, not a prediction."
+    references = "\n\n".join(f"[{numbers[source.id]}] {source.title} — [{source.url}]({source.url})" for source in sources.values()) or "No traceable source references are available."
+    content = dict(zip((key for key, _ in SECTION_TITLES), [abstract, summary, introduction, methodology, background, detailed, timeline, comparison, discussion, conclusion, references]))
+    draft_fields = {"abstract": draft.abstract, "introduction": draft.introduction, "background": draft.background_review,
+        "analysis": "\n\n".join(draft.detailed_analysis), "timeline": draft.timeline, "comparison": draft.comparative_analysis,
+        "discussion": draft.discussion, "conclusion": draft.conclusion + "\n\n" + draft.future_directions}
+    for section in draft.sections:
+        if section.id in draft_fields:
+            draft_fields[section.id] += "\n\n" + section.content
+    # Validate all model prose, including fields replaced by authoritative session metadata.
+    for text in [draft.executive_summary, *draft.key_findings, draft.methodology, draft.references, *draft.limitations]:
+        _report_prose(text, state, evidence, numbers)
+    for key, text in draft_fields.items():
+        additional = _report_prose(text, state, evidence, numbers)
+        if additional and additional not in content[key]:
+            content[key] = additional + "\n\n" + content[key]
+    return StructuredReport(title=f"Research Report: {safe_label(state.question.question)}",
+        sections=[ReportSection(id=key, title=title, content=content[key]) for key, title in SECTION_TITLES], charts=charts, tables=tables)
+
+
 def render_report(draft: ReportDraft, state: ResearchState) -> str:
+    if not isinstance(draft, ReportDraft):
+        return _render_legacy_report(draft, state)
+    academic = state.provenance_required or any((draft.abstract, draft.introduction, draft.methodology, draft.background_review,
+        draft.timeline, draft.comparative_analysis, draft.discussion, draft.future_directions, draft.references, draft.sections, draft.charts, draft.tables))
+    if not academic:
+        return _render_legacy_report(draft, state)
+    # The orchestrator already builds the authoritative structure before rendering.
+    report = state.structured_report or build_structured_report(draft, state)
+    numbers = {source.id: str(index) for index, source in enumerate(state.sources, 1)}
+    lines = ["# " + report.title, ""]
+    for section in report.sections:
+        lines.extend(["## " + section.title, section.content, ""])
+        visuals = [*report.tables, *report.charts]
+        for visual in [visual for visual in visuals if visual.section_id == section.id]:
+            refs = " ".join(f"[{numbers[sid]}]" for sid in visual.source_ids if sid in numbers)
+            lines.extend(["### " + visual.title, "_" + visual.caption + "_ " + refs, ""])
+            if isinstance(visual, TableSpec):
+                columns, rows = visual.columns, visual.rows
+            else:
+                columns, rows = [visual.x_key] + [series.key for series in visual.series], visual.data
+                lines.append("Chart data (" + visual.type + "):")
+            def cell(value):
+                return str(value).replace("|", "\\|").replace("\n", " ")
+            lines.extend(["| " + " | ".join(cell(column) for column in columns) + " |", "| " + " | ".join("---" for _ in columns) + " |"])
+            lines.extend("| " + " | ".join(cell(row.get(column, "")) for column in columns) + " |" for row in rows)
+            lines.append("")
+    return "\n".join(lines) + "\n"
+
+def _render_legacy_report(draft: ReportDraft, state: ResearchState) -> str:
     if state.provenance_required:
         # Free-form model summaries cannot establish provenance. Summarize validated
         # claim records and keep unsupported claims visibly Unverified instead.
@@ -86,7 +527,29 @@ def render_report(draft: ReportDraft, state: ResearchState) -> str:
         text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
         return re.sub(r"\[((?:S\d+|\d+)(?:\s*[,;]\s*(?:S\d+|\d+))*)\]", lambda match: " ".join(replace_token(token.strip()) for token in re.split(r"[,;]", match.group(1))), text)
 
-    lines = [f"# {citations(draft.title.replace(chr(10), ' '))}", "", "## Executive Summary", citations(draft.executive_summary), "",
+    academic = bool(draft.abstract or draft.introduction or draft.methodology or draft.background_review or
+                    draft.timeline or draft.comparative_analysis or draft.discussion or draft.future_directions or
+                    draft.references or draft.sections or draft.charts or draft.tables)
+    if academic:
+        sections = build_structured_report(draft, state).sections
+        lines = [f"# {citations(draft.title.replace(chr(10), ' '))}", ""]
+        for section in sections:
+            lines.extend([f"## {section.title}", citations(section.content), ""])
+        for table in build_structured_report(draft, state).tables:
+            lines.extend([f"### {table.title}", f"_{citations(table.caption)}_", "",
+                "| " + " | ".join(table.columns) + " |",
+                "| " + " | ".join("---" for _ in table.columns) + " |"])
+            for row in table.rows:
+                lines.append("| " + " | ".join(citations(str(row.get(column, ""))).replace("|", "\\|") for column in table.columns) + " |")
+            lines.append("")
+        for chart in build_structured_report(draft, state).charts:
+            lines.extend([f"### {chart.title}", f"_{citations(chart.caption)}_", "",
+                "Chart data: " + ", ".join(f"{item.get(chart.x_key, '')}: " + ", ".join(
+                    f"{series.label}={item.get(series.key, '')}" for series in chart.series
+                ) for item in chart.data), ""])
+        lines += ["## Sources"]
+    else:
+        lines = [f"# {citations(draft.title.replace(chr(10), ' '))}", "", "## Executive Summary", citations(draft.executive_summary), "",
         "## Methodology", f"Mode: {mode.label}. {mode.strategy}",
         f"Filters applied: {json.dumps(state.filters.model_dump(mode='json'), ensure_ascii=False)}",
         f"Source count: {len(state.sources)} retained; {len(state.filtered_sources)} filtered out. Searches: {state.searches_performed}. Iterations: {state.iteration}.",
@@ -96,6 +559,10 @@ def render_report(draft: ReportDraft, state: ResearchState) -> str:
         f"Quality weights: {json.dumps(mode.weights.model_dump())}. Citation relevance threshold: {mode.relevance_threshold:.0%}.",
         "Scores are heuristic estimates, not verified reliability: lexical overlap, domain/type authority proxy, freshness, mode preference and available text length. Missing dates receive zero freshness and are excluded by active date filters. Primary preference prioritizes primary, academic and documentation sources within each search batch.",
         "Statuses derive from validated excerpts: direct support = Supported; partial support or mixed support/contradiction = Partially Supported; contradiction only = Contradicted; context/no evidence = Unverified. Evidence relations are model assessments and still need human review.", "", "## Key Findings"]
+    if academic:
+        for number, source in enumerate(state.sources, 1):
+            lines.append(f"[{number}] {source.title} — [{source.url}]({source.url})")
+        return "\n".join(lines) + "\n"
     if state.findings:
         for finding in state.findings:
             refs = " ".join(f"[{source_id}]" for source_id in finding.source_ids)

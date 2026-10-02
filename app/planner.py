@@ -1,8 +1,9 @@
 """Research planning."""
 
-from app.llm import LLMClient
+from app.llm import LLMClient, invoke_structured
+from app.llm.routing import PLANNING as PLANNING_TASK
 from app.models import ResearchPlan, ResearchQuestion
-from app.prompts import PLANNING
+from app.prompts import PLANNING as PLANNING_PROMPT
 from app.modes import MODES
 import logging
 import re
@@ -37,7 +38,12 @@ class Planner:
         if question.comparison_items:
             instructions += f"\nItems to compare against common criteria: {question.comparison_items}"
         try:
-            plan = self.llm.generate_structured(PLANNING.format(question=question.refined_question or question.question) + instructions, ResearchPlan)
+            plan = invoke_structured(
+                self.llm,
+                PLANNING_PROMPT.format(question=question.refined_question or question.question) + instructions,
+                ResearchPlan,
+                task=PLANNING_TASK,
+            )
             plan.search_queries = list(dict.fromkeys(plan.search_queries))[:mode.queries]
             return plan
         except (RuntimeError, ValueError) as exc:

@@ -3,9 +3,22 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Root, Element, Text } from "hast";
 import { Citation } from "./Citation";
-import type { ResearchSource } from "../types/research";
+import { ReportVisuals } from "./ReportVisuals";
+import type { ReportSection, ResearchSource, StructuredReport } from "../types/research";
 
-export function ResearchReport({ markdown, sources, onPreview }: { markdown: string; sources: ResearchSource[]; onPreview: (source: ResearchSource) => void }) {
+// Legacy Markdown remains readable; current reports use the backend's ordered sections.
+export function splitReport(markdown: string): { title: string; sections: ReportSection[] } {
+  const title = markdown.match(/^#\s+(.+)$/m)?.[1] || "Research report";
+  const chunks = markdown.split(/^##\s+/m);
+  const sections = chunks.slice(1).map((chunk, index) => {
+    const lineBreak = chunk.indexOf("\n");
+    return { id: `section-${index + 1}`, title: (lineBreak < 0 ? chunk : chunk.slice(0, lineBreak)).trim(), content: lineBreak < 0 ? "" : chunk.slice(lineBreak + 1).trim() };
+  });
+  if (!sections.length) sections.push({ id: "body", title: "Research report", content: markdown.replace(/^#\s+.+\n?/, "").trim() });
+  return { title, sections };
+}
+
+export function ResearchReport({ markdown, sources, onPreview, structured }: { markdown: string; sources: ResearchSource[]; onPreview: (source: ResearchSource) => void; structured?: StructuredReport }) {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState("");
   const [query, setQuery] = useState("");
@@ -14,11 +27,18 @@ export function ResearchReport({ markdown, sources, onPreview }: { markdown: str
   const article = useRef<HTMLElement>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout>>();
   useEffect(() => () => clearTimeout(copyTimer.current), []);
-  const linkedMarkdown = useMemo(() => markdown.replace(/\[(\d+)\](?!\()/g, (original, number: string) => {
-    const source = sources[Number(number) - 1];
-    return source ? "[" + number + "](#source-" + source.id + ")" : original;
-  }), [markdown, sources]);
-  const headings = useMemo(() => [...markdown.matchAll(/^#{2,3}\s+(.+)$/gm)].map((match) => ({ label: match[1].replace(/[*_`]/g, ""), id: match[1].toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") })), [markdown]);
+  const report = useMemo(() => structured?.sections.length ? structured : splitReport(markdown), [structured, markdown]);
+  const sectionIds = new Set(report.sections.map((section) => section.id));
+  const visualSection = (item: { section_id?: string; origin?: string }) => {
+    if (item.section_id && sectionIds.has(item.section_id)) return item.section_id;
+    const preferred = item.origin === "session" ? "methodology" : "comparison";
+    return sectionIds.has(preferred) ? preferred : report.sections[report.sections.length - 1]?.id;
+  };
+  const linkedText = (text: string) => text.replace(/\[((?:S\d+|\d+)(?:\s*[,;]\s*(?:S\d+|\d+))*)\](?!\()/g, (_original, group: string) => group.split(/[,;]/).map((token) => {
+    const id = token.trim();
+    const source = id.startsWith("S") ? sources.find((item) => item.id === id) : sources[Number(id) - 1];
+    return source ? `[${sources.indexOf(source) + 1}](#source-${source.id})` : "[citation unavailable]";
+  }).join(" "));
   const highlight = useMemo(() => () => (tree: Root) => {
     const needle = query.trim().toLowerCase();
     if (!needle) return;
@@ -41,7 +61,7 @@ export function ResearchReport({ markdown, sources, onPreview }: { markdown: str
     };
     visit(tree);
   }, [query]);
-  useEffect(() => { setCount(article.current?.querySelectorAll("mark").length || 0); setActive(0); }, [query, markdown]);
+  useEffect(() => { setCount(article.current?.querySelectorAll("mark").length || 0); setActive(0); }, [query, report]);
   useEffect(() => {
     const matches = article.current?.querySelectorAll("mark");
     matches?.forEach((mark, index) => mark.classList.toggle("report-match-current", index === active));
@@ -59,9 +79,9 @@ export function ResearchReport({ markdown, sources, onPreview }: { markdown: str
       clearTimeout(copyTimer.current); copyTimer.current = setTimeout(() => setCopied(false), 1800);
     } catch { setCopyError("Clipboard access failed. Download the Markdown report instead."); }
   };
-  return <section id="final-report" className="report-wrapper min-w-0 overflow-hidden rounded-3xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-    <header className="report-toolbar border-b border-slate-100 p-5 dark:border-slate-800">
-      <h2 className="text-lg font-semibold">Research report</h2>
+  return <section id="final-report" className="report-wrapper print-report" aria-label="Final research report">
+    <header className="report-toolbar no-print border-b border-slate-200 px-5 py-5 dark:border-slate-800">
+      <div className="flex flex-wrap items-baseline justify-between gap-3"><h2 className="text-lg font-semibold">Research report</h2><p className="text-xs text-slate-500">{report.sections.length} sections · {sources.length} retrieved sources</p></div>
       <div className="mt-3 flex flex-wrap gap-2">
         <button className="button-secondary" onClick={copy}>{copied ? "Copied" : "Copy report"}</button>
         <button className="button-secondary" onClick={download}>Export Markdown</button>
@@ -70,20 +90,26 @@ export function ResearchReport({ markdown, sources, onPreview }: { markdown: str
       </div>
       <p className="mt-2 text-xs text-slate-500">PDF export uses your browser’s “Save as PDF” destination.</p>
       {copyError && <p role="alert" className="mt-2 text-sm text-red-600">{copyError}</p>}
-      <div className="mt-4 flex flex-wrap items-center gap-2"><label htmlFor="report-search" className="sr-only">Search within report</label><input id="report-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search within report" className="select min-h-10 flex-1" /><span aria-live="polite" className="text-xs">{count ? active + 1 : 0} / {count}</span><button aria-label="Previous match" disabled={!count} className="button-secondary" onClick={() => setActive((active + count - 1) % count)}>Previous</button><button aria-label="Next match" disabled={!count} className="button-secondary" onClick={() => setActive((active + 1) % count)}>Next</button></div>
+      <div className="mt-4 flex flex-wrap items-center gap-2"><label htmlFor="report-search" className="sr-only">Search within report</label><input id="report-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search within report" className="select min-h-10 min-w-0 flex-1" /><span aria-live="polite" className="text-xs">{count ? active + 1 : 0} / {count}</span><button aria-label="Previous match" disabled={!count} className="button-secondary" onClick={() => setActive((active + count - 1) % count)}>Previous</button><button aria-label="Next match" disabled={!count} className="button-secondary" onClick={() => setActive((active + 1) % count)}>Next</button></div>
     </header>
-    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_180px]">
-    <article ref={article} className="report-content px-4 py-6 sm:px-8">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[highlight]} components={{
-        table: ({ children }) => <div className="report-table-wrap"><table>{children}</table></div>,
-        h2: ({ children }) => { const label = String(children); const id = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""); return <h2 id={id}>{children}</h2>; },
-        a: ({ href, children }) => {
-          const source = sources.find((source) => href === "#source-" + source.id);
-          return source ? <Citation n={sources.indexOf(source) + 1} onClick={() => onPreview(source)} /> : <a href={href} target="_blank" rel="noreferrer">{children}</a>;
-        },
-      }}>{linkedMarkdown}</ReactMarkdown>
-    </article>
-    {headings.length > 0 && <nav className="order-first hidden border-l border-slate-100 p-4 lg:order-last lg:block dark:border-slate-800" aria-label="Report sections"><p className="eyebrow">On this page</p><div className="mt-3 space-y-2">{headings.map((heading) => <a key={heading.id} href={`#${heading.id}`} className="block text-xs text-slate-500 hover:text-indigo-600">{heading.label}</a>)}</div></nav>}
+    <div className="report-layout">
+      <article ref={article} className="report-content report-document">
+        <p className="report-kicker">Evidence-led research / Final document</p>
+        <h1 className="report-document-title">{report.title}</h1>
+        {report.sections.map((section, index) => <section key={section.id} id={`report-${section.id}`} className="report-document-section" aria-labelledby={`report-heading-${section.id}`}>
+          <h2 id={`report-heading-${section.id}`}><span className="report-section-number" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>{section.title}</h2>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[highlight]} components={{
+            table: ({ children }) => <div className="report-table-wrap" tabIndex={0} role="region" aria-label={`${section.title} table`}><table>{children}</table></div>,
+            a: ({ href, children }) => {
+              const source = sources.find((item) => href === "#source-" + item.id);
+              return source ? <Citation n={sources.indexOf(source) + 1} onClick={() => onPreview(source)} /> : <a href={href} target={href?.startsWith("#") ? undefined : "_blank"} rel="noreferrer">{children}</a>;
+            },
+          }}>{linkedText(section.content)}</ReactMarkdown>
+          {structured && <ReportVisuals charts={structured.charts.filter((item) => visualSection(item) === section.id)} tables={structured.tables.filter((item) => visualSection(item) === section.id)} sources={sources} onPreview={onPreview} />}
+        </section>)}
+        {structured && !structured.charts.length && !structured.tables.length && <p className="report-visual-status">No validated chart or table data was available for this research session. Visuals are shown only when the retrieved evidence contains traceable measurements or the research state contains quality/status data.</p>}
+      </article>
+      <nav className="report-toc" aria-label="Report sections"><div className="report-toc-inner"><p className="eyebrow">In this report</p><ol>{report.sections.map((section, index) => <li key={section.id}><a href={`#report-${section.id}`}><span aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>{section.title}</a></li>)}</ol></div></nav>
     </div>
   </section>;
 }

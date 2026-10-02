@@ -20,6 +20,9 @@ export function ResearchInput({ value, setValue, mode, setMode, maxSources, setM
       <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Turn a question into a sourced report.</h1>
       <p className="mt-3 text-sm text-slate-500">Choose a research strategy, refine your sources, and inspect the evidence.</p>
     </div>
+    <div className="mb-4 flex flex-wrap justify-center gap-2" aria-label="Example research questions">
+      {["Compare FastAPI and Django for an AI backend.", "What evidence supports renewable energy adoption?", "Fact-check a technical claim"].map((example) => <button key={example} type="button" className="chip" onClick={() => setValue(example)}>{example}</button>)}
+    </div>
     <form onSubmit={(event) => { event.preventDefault(); if (!invalidDates && !invalidTargets) onSubmit(); }} className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <fieldset disabled={disabled} className="space-y-4">
         <label className="block text-sm font-medium" htmlFor="research-question">Research question</label>

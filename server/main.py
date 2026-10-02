@@ -7,7 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from .api.models import ResearchRequest, ResearchStarted
-from .api.research import get_public_state, jobs, start_research, stream_research
+from app.chat import ChatRequest, ChatResponse
+from .api.research import chat_research, get_public_state, jobs, start_research, stream_research
 
 
 @asynccontextmanager
@@ -67,3 +68,14 @@ async def research_result(research_id: str) -> dict:
     if result is None:
         raise HTTPException(status_code=404, detail="Research result not found")
     return result
+
+
+@app.post("/api/research/{research_id}/chat", response_model=ChatResponse)
+async def research_chat(research_id: str, request: ChatRequest) -> ChatResponse:
+    try:
+        return await chat_research(research_id, request)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception:
+        logging.getLogger(__name__).exception("Research chat failed for %s", research_id)
+        raise HTTPException(status_code=503, detail="The research assistant is temporarily unavailable.") from None

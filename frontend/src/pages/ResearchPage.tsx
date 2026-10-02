@@ -17,11 +17,16 @@ import { ResearchTimeline } from "../components/ResearchTimeline";
 import { EvidenceExplorer } from "../components/EvidenceExplorer";
 import { ResearchQuality } from "../components/ResearchQuality";
 import { ResearchInsights } from "../components/ResearchInsights";
+import { ClaimExplorer } from "../components/ClaimExplorer";
+import { ResearchGaps } from "../components/ResearchGaps";
+import { ResearchChat } from "../components/ResearchChat";
 import { startResearch, streamResearch } from "../services/api";
 import { emptyFilters } from "../types/research";
 import type { ResearchEvent, ResearchSource, ResearchStatus, ResearchMode, SourceFilters, ResearchBudgets } from "../types/research";
 import { initialResearchSession, researchReducer } from "../state/researchStore";
-import { highQualitySources, relevantSources, researchCoverage, verifiedClaims } from "../scoring/metrics";
+import { restoreResearch } from "../state/researchStore";
+import { deleteSavedResearch, clearSavedResearch, listSavedResearch, saveResearch, toSavedResearch, type SavedResearch } from "../storage/researchStorage";
+import { citationCoverage, evidenceCount, highQualitySources, relevantSources, researchCoverage, verifiedClaims } from "../scoring/metrics";
 
 export function ResearchPage() {
   const [question, setQuestion] = useState("");
@@ -35,9 +40,13 @@ export function ResearchPage() {
   const [dark, setDark] = useState(() => localStorage.getItem("research-theme") === "dark");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [saved, setSaved] = useState<SavedResearch[]>([]);
+  const [storageError, setStorageError] = useState("");
   const cleanup = useRef<(() => void) | null>(null);
   const generation = useRef(0);
+  const savedSessionId = useRef<string | null>(null);
   const status: ResearchStatus = session.status;
+  const snapshot = session.snapshot;
 
   useEffect(() => () => { generation.current++; cleanup.current?.(); }, []);
   useEffect(() => {
@@ -50,6 +59,22 @@ export function ResearchPage() {
     const timer = window.setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
     return () => window.clearInterval(timer);
   }, [status]);
+  useEffect(() => {
+    listSavedResearch().then(setSaved);
+    const closeSidebar = () => setSidebarOpen(false);
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") closeSidebar(); };
+    window.addEventListener("hashchange", closeSidebar);
+    document.addEventListener("keydown", escape);
+    return () => { window.removeEventListener("hashchange", closeSidebar); document.removeEventListener("keydown", escape); };
+  }, []);
+  useEffect(() => {
+    if (status !== "completed" || !snapshot || !session.report) return;
+    const id = session.events.find((event) => event.research_id)?.research_id || `saved-${Date.now()}`;
+    if (savedSessionId.current === id) return;
+    savedSessionId.current = id;
+    const item = toSavedResearch(id, snapshot.question.question, snapshot.mode || mode, session.report, snapshot);
+    saveResearch(item).then(() => listSavedResearch().then(setSaved)).catch(() => setStorageError("This report could not be saved. Browser storage may be full; export the report before leaving."));
+  }, [mode, session.events, session.report, snapshot, status]);
 
   const clearResults = () => {
     generation.current++;
@@ -59,8 +84,21 @@ export function ResearchPage() {
     setPreview(null);
   };
   const reset = () => {
-    clearResults(); setQuestion(""); setTargets(""); setFilters(emptyFilters()); setMode("quick"); setMaxSources(10); setBudgets({});
+    clearResults(); savedSessionId.current = null; setQuestion(""); setTargets(""); setFilters(emptyFilters()); setMode("quick"); setMaxSources(10); setBudgets({});
   };
+  const openSaved = (item: SavedResearch) => {
+    cleanup.current?.(); cleanup.current = null; generation.current++;
+    dispatch({ type: "restore", session: restoreResearch(item) });
+    setQuestion(item.question); setMode(item.mode); setStorageError("");
+  };
+  const renameSaved = async (item: SavedResearch) => {
+    const name = window.prompt("Name this saved research", item.name || item.question);
+    if (!name?.trim()) return;
+    try { const renamed = { ...item, name: name.trim() }; await saveResearch(renamed); setSaved(await listSavedResearch()); }
+    catch { setStorageError("This saved research could not be renamed because browser storage is unavailable."); }
+  };
+  const removeSaved = async (id: string) => { try { await deleteSavedResearch(id); setSaved(await listSavedResearch()); } catch { setStorageError("This saved research could not be deleted."); } };
+  const clearSaved = async () => { if (window.confirm("Clear all saved research from this browser?")) { try { await clearSavedResearch(); setSaved([]); } catch { setStorageError("Saved research could not be cleared."); } } };
   const run = async () => {
     if (question.trim().length < 3 || status === "researching") return;
     clearResults();
@@ -83,19 +121,19 @@ export function ResearchPage() {
     }
   };
 
-  const snapshot = session.snapshot;
+  const researchId = session.events.find((event) => event.research_id)?.research_id;
   return <div className="app-shell min-h-screen">
-    <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} onNew={reset} />
+    <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} onNew={reset} saved={saved} onOpenSaved={openSaved} onRenameSaved={renameSaved} onDeleteSaved={removeSaved} onClearSaved={clearSaved} />
     <div className="lg:pl-64">
       <Header dark={dark} onTheme={() => setDark((old) => !old)} onNew={reset} onMenu={() => setSidebarOpen(true)} status={status} mode={mode} />
       <main id="main-content" className="mx-auto max-w-7xl overflow-x-hidden px-4 py-8 sm:px-6 lg:px-8">
-        <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
+        <div className="mb-8 flex flex-wrap items-end justify-between gap-4 no-print">
           <div><p className="eyebrow">Research workspace</p><h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">{snapshot?.question.refined_question || question || "Start with a research question"}</h1></div>
           {status !== "idle" && <span className={`badge ${status === "error" ? "badge-error" : status === "completed" ? "badge-success" : "badge-indigo"}`} role="status">{status === "researching" ? "Live research" : status}</span>}
         </div>
         {status === "idle" ? <><ResearchInput value={question} setValue={setQuestion} mode={mode} setMode={setMode} maxSources={maxSources} setMaxSources={setMaxSources} filters={filters} setFilters={setFilters} targets={targets} setTargets={setTargets} disabled={false} onSubmit={run} budgets={budgets} setBudgets={setBudgets} /><EmptyState /></> :
           <div className="research-results grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,380px)]">
-            <div className="min-w-0 space-y-6">
+            <div className="min-w-0 space-y-6 no-print">
               <ResearchProgress events={session.events} status={status} hasReport={Boolean(session.report)} mode={mode} sources={session.sources} />
               <ResearchTimeline events={session.events} status={status} />
               {snapshot && <div className="metric-grid">
@@ -106,25 +144,32 @@ export function ResearchPage() {
                 <MetricCard label="Verified claims" value={verifiedClaims(snapshot).value ?? "Not available"} description={verifiedClaims(snapshot).formula} />
                 <MetricCard label="Conflicts" value={session.conflicts.length} description="Conflicts detected from linked claims and evidence." />
                 <MetricCard label="Research coverage" value={researchCoverage(snapshot).value === null ? "Not available" : `${Math.round(researchCoverage(snapshot).value! * 100)}%`} description={researchCoverage(snapshot).formula} />
-                <MetricCard label="Evidence coverage" value="Not available" description="Not available: the backend does not report an aggregate evidence coverage metric." />
+                <MetricCard label="Evidence" value={evidenceCount(snapshot).value ?? "Not available"} description={evidenceCount(snapshot).formula} />
+                <MetricCard label="Citation coverage" value={citationCoverage(snapshot).value === null ? "Not available" : `${Math.round(citationCoverage(snapshot).value! * 100)}%`} description={citationCoverage(snapshot).formula} />
               </div>}
               {status === "researching" && <p className="text-xs text-slate-500" role="timer">Elapsed time: {Math.floor(elapsed / 60)}m {elapsed % 60}s</p>}
               {session.error && <div role="alert" className="error-state"><p className="font-medium">Research interrupted</p><p className="mt-1 text-sm">{session.error}</p><button onClick={run} className="button-secondary mt-3">Retry Research</button></div>}
               {snapshot && <div className="card text-sm"><p><strong>Research scope:</strong> {snapshot.question.refined_question || snapshot.question.question}</p>{snapshot.question.assumptions?.map((assumption) => <p key={assumption} className="mt-2 text-xs text-slate-500">Assumption: {assumption}</p>)}</div>}
               {snapshot?.graph && <ResearchGraph graph={snapshot.graph} sources={session.sources} onPreview={setPreview} />}
               {session.findings.length > 0 && <section id="findings"><h2 className="mb-3 text-lg font-semibold">Findings and evidence</h2><div className="grid gap-4">{session.findings.map((finding, index) => <FindingCard key={finding.id || index} finding={finding} sources={session.sources} evidence={session.evidence} onPreview={setPreview} />)}</div></section>}
+              {session.findings.length > 0 && <ClaimExplorer findings={session.findings} evidence={session.evidence} sources={session.sources} verifications={session.verifications} onPreview={setPreview} />}
               {session.evidence.length > 0 && <EvidenceExplorer evidence={session.evidence} findings={session.findings} sources={session.sources} onPreview={setPreview} />}
               {session.conflicts.length > 0 && <section id="conflicts"><h2 className="mb-3 text-lg font-semibold">Conflicts</h2><div className="space-y-3">{session.conflicts.map((conflict, index) => <ConflictCard key={index} conflict={conflict} sources={session.sources} evidence={session.evidence} onPreview={setPreview} />)}</div></section>}
               {snapshot && <ResearchQuality state={snapshot} />}
-              {snapshot && <ResearchInsights state={snapshot} findings={session.findings} />}
-              {snapshot && Boolean(snapshot.citation_rejections?.length) && <details className="card"><summary className="cursor-pointer text-sm font-medium">Citation validation log ({snapshot.citation_rejections!.length})</summary></details>}
-              {session.report && <ResearchReport markdown={session.report} sources={session.sources} onPreview={setPreview} />}
+              {session.gaps.length > 0 && <ResearchGaps gaps={session.gaps} />}
             </div>
-            <aside className="min-w-0 space-y-6"><SourceList sources={session.sources} onPreview={setPreview} />{snapshot?.audit_log && <AuditView entries={snapshot.audit_log} />}<ActivityLog events={session.events} /></aside>
+            <aside className="min-w-0 space-y-6 no-print"><SourceList sources={session.sources} onPreview={setPreview} />{snapshot?.audit_log && <AuditView entries={snapshot.audit_log} />}<ActivityLog events={session.events} /></aside>
+            {session.report && <div className="report-full-width"><ResearchReport markdown={session.report} structured={snapshot?.structured_report} sources={session.sources} onPreview={setPreview} /></div>}
+            <div className="report-support-panels report-full-width no-print">
+              {snapshot && <details className="report-support-panel"><summary>Research insights</summary><ResearchInsights state={snapshot} findings={session.findings} /></details>}
+              {snapshot && <details className="card"><summary className="cursor-pointer text-sm font-medium">Citation validation log ({snapshot.citation_rejections?.length || 0})</summary>{snapshot.citation_rejections?.length ? <ul className="mt-4 space-y-3 text-sm">{snapshot.citation_rejections.map((item, index) => <li key={index}><strong>{item.claim_id}</strong> · {item.source_id || item.evidence_id || "Report"}<p className="mt-1 text-slate-500">{item.reason}</p></li>)}</ul> : <p className="mt-3 text-sm text-slate-500">No citations have been rejected in this session.</p>}</details>}
+            </div>
           </div>}
-        <footer className="mx-auto mt-12 max-w-3xl border-t border-slate-200 py-8 text-center dark:border-slate-800"><p className="text-xs text-slate-500">Session-scoped research. Metrics are shown only when supported by the research state.</p></footer>
+        {storageError && <p className="no-print mt-4 text-sm text-amber-700" role="alert">{storageError}</p>}
+        <footer className="mx-auto mt-12 max-w-3xl border-t border-slate-200 py-8 text-center dark:border-slate-800 no-print"><p className="text-xs text-slate-500">Session-scoped research. Saved reports stay in this browser only.</p></footer>
       </main>
     </div>
     {preview && <SourcePreview source={preview} evidence={session.evidence} onClose={() => setPreview(null)} />}
+    {snapshot && researchId && <ResearchChat key={researchId} researchId={researchId} state={snapshot} findings={session.findings} evidence={session.evidence} sources={session.sources} onPreview={setPreview} />}
   </div>;
 }

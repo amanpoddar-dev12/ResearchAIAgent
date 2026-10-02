@@ -10,6 +10,8 @@ from uuid import uuid4
 from app.agent import ResearchAgent
 from app.config import Settings
 from app.models import ResearchState
+from app.chat import ChatRequest, ChatResponse, answer_chat
+from app.llm.router import LLMRouter
 from app.modes import MODES
 from .models import ResearchRequest
 
@@ -24,12 +26,14 @@ class ResearchJob:
     progress: int = 0
     phase: str = "starting"
     mode: str = "standard"
+    sequence: int = 0
 
 
 jobs: dict[str, ResearchJob] = {}
 
 
-def _event(event_type: str, message: str, data: Any = None) -> dict[str, Any]:
+def _event(event_type: str, message: str, data: Any = None, *, research_id: str | None = None,
+           sequence: int | None = None, stage: str | None = None) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "type": event_type,
         "message": message,
@@ -37,6 +41,12 @@ def _event(event_type: str, message: str, data: Any = None) -> dict[str, Any]:
     }
     if data is not None:
         payload["data"] = data.model_dump(mode="json") if hasattr(data, "model_dump") else data
+    if research_id is not None:
+        payload["research_id"] = research_id
+    if sequence is not None:
+        payload["sequence"] = sequence
+    if stage is not None:
+        payload["stage"] = stage
     return payload
 
 
@@ -71,7 +81,11 @@ async def _run_job(research_id: str, request: ResearchRequest) -> None:
         if event_type == "research_progress":
             job.progress = max(job.progress, min(100, data["progress"]))
             job.phase = data["phase"]
-        payload = _event(event_type, message, data)
+        job.sequence += 1
+        stage = job.phase
+        if isinstance(data, dict) and data.get("phase"):
+            stage = data["phase"]
+        payload = _event(event_type, message, data, research_id=research_id, sequence=job.sequence, stage=stage)
         payload.update(progress=job.progress, phase=job.phase, mode=job.mode)
         job.queue.put_nowait(payload)
 
@@ -113,3 +127,12 @@ def get_public_state(research_id: str) -> dict[str, Any] | None:
     if not job or not job.state:
         return None
     return _public_state(job.state)
+
+
+async def chat_research(research_id: str, request: ChatRequest) -> ChatResponse:
+    job = jobs.get(research_id)
+    if not job or not job.state:
+        raise LookupError("Research result not found")
+    settings = Settings()
+    router = LLMRouter(settings, max_requests=4)
+    return await asyncio.to_thread(answer_chat, router, request, job.state)

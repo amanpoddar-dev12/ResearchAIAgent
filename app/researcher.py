@@ -7,9 +7,10 @@ import math
 import time
 from urllib.parse import urlsplit
 from app.extractor import Extractor
-from app.models import GapAssessment, ResearchState, Source, SubQuestion, Finding, StopDecision
+from app.models import GapAssessment, ResearchGap, ResearchState, Source, SubQuestion, Finding, StopDecision
 from app.prompts import GAP_DETECTION
-from app.llm import LLMClient
+from app.llm import LLMClient, invoke_structured
+from app.llm.routing import GAP_ANALYSIS
 from tools.web_search import search_web, normalize_url
 from tools.webpage import fetch_webpage
 from app.modes import MODES
@@ -22,9 +23,11 @@ logger = logging.getLogger(__name__)
 
 
 class Researcher:
-    def __init__(self, llm: LLMClient, tavily_key: str, max_searches: int, max_sources: int, max_iterations: int) -> None:
+    def __init__(self, llm: LLMClient, tavily_key: str, max_searches: int, max_sources: int, max_iterations: int,
+                 additional_research_rounds: int = 2) -> None:
         self.llm, self.tavily_key = llm, tavily_key
         self.max_searches, self.max_sources, self.max_iterations = max_searches, max_sources, max_iterations
+        self.additional_research_rounds = additional_research_rounds
         self.extractor = Extractor(llm)
 
     def run(self, state: ResearchState, emit=None) -> ResearchState:
@@ -98,6 +101,7 @@ class Researcher:
         pending = [(task.query, "Initial planned sub-question", [task.id]) for task in tasks if task.id not in invalid]
         batch_size = max(1, math.ceil(min(len(tasks), state.max_searches) / state.max_iterations))
         emitted_claims, emitted_evidence, analyzed = set(), set(), set()
+        gap_rounds = 0
         try:
             for iteration in range(state.max_iterations):
                 if time.monotonic() >= deadline:
@@ -135,6 +139,10 @@ class Researcher:
                             emit("source_filtered", item["reason"], item)
                         for source in candidates:
                             source.quality = score_source(source, state.question.question, mode)
+                            source.relevance_score = source.quality.relevance
+                            source.authority_score = source.quality.authority
+                            source.freshness_score = source.quality.freshness
+                            source.quality_score_value = source.quality.total
                         candidates.sort(key=lambda source: (state.filters.prefer_primary and source.source_type in {"primary", "academic", "documentation"}, source.quality.total), reverse=True)
                         for source in candidates:
                             if source.url not in state.retrieved_urls:
@@ -173,9 +181,11 @@ class Researcher:
                 for item in state.evidence:
                     if item.id not in emitted_evidence:
                         emit("evidence_linked", "Validated source excerpt", item.model_copy(deep=True))
+                        emit("evidence_found", "Evidence passage extracted", item.model_copy(deep=True))
                         emitted_evidence.add(item.id)
                 for finding in state.findings:
                     emit("finding_updated" if finding.id in emitted_claims else "finding_extracted", "Finding verified", finding.model_copy(deep=True))
+                    emit("claim_extracted", "Claim extracted from evidence", finding.model_copy(deep=True))
                     emitted_claims.add(finding.id)
                 state.evidence_gains.append(max(0, len(state.evidence) - before_evidence))
                 coverage, gaps = coverage_gaps(state)
@@ -190,13 +200,22 @@ class Researcher:
                 emit("research_snapshot", "Iteration complete", state.model_dump(mode="json", exclude={"sources": {"__all__": {"content"}}}))
                 if decision.stop:
                     break
+                follow_up_queries = []
+                if getattr(self.llm, "supports_task_routing", False) and gap_rounds < self.additional_research_rounds:
+                    assessment = await bounded_call(executor, deadline, invoke_structured, self.llm,
+                        GAP_DETECTION.format(question=state.question.question, plan=state.plan, findings=state.findings),
+                        GapAssessment, task=GAP_ANALYSIS)
+                    follow_up_queries = assessment.follow_up_queries
+                    gap_rounds += 1
                 # Rebuild the worklist exclusively from measured gaps. Unsearched tasks go first.
                 pending = [entry for entry in gaps if not any(qid in invalid for qid in entry[2])]
+                pending.extend((query, "LLM-detected evidence gap", []) for query in follow_up_queries if query.strip())
                 pending.sort(key=lambda entry: any(qid in state.searched_sub_questions for qid in entry[2]))
                 for query, reason, qids in pending:
                     audit(state, "expansion", "Targeted evidence gap", query=query, reason=reason, sub_question_ids=qids)
-            assessment = await bounded_call(executor, deadline, self.llm.generate_structured,
-                GAP_DETECTION.format(question=state.question.question, plan=state.plan, findings=state.findings), GapAssessment)
+            assessment = await bounded_call(executor, deadline, invoke_structured, self.llm,
+                GAP_DETECTION.format(question=state.question.question, plan=state.plan, findings=state.findings), GapAssessment,
+                task=GAP_ANALYSIS)
             generated_gaps = assessment.gaps if isinstance(assessment, GapAssessment) else list(assessment.get("gaps", []))
             state.gaps = list(dict.fromkeys(state.unresolved_questions + generated_gaps))
         except TimeoutError:
@@ -212,6 +231,12 @@ class Researcher:
             emit("citation_rejected", rejection.reason, rejection)
         for gap in state.gaps:
             emit("gap_detected", f"Research gap detected: {gap}", {"gap": gap})
+            emit("research_gap_detected", f"Research gap detected: {gap}", {"gap": gap})
+        state.research_gaps = [
+            ResearchGap(gap_id=f"G{index}", description=gap, importance="high" if "Unverified" in gap or "no evidence" in gap.lower() else "medium",
+                        reason=gap, recommended_search=gap.split(":", 1)[-1].strip())
+            for index, gap in enumerate(state.gaps, 1)
+        ]
         state.llm_requests_used = getattr(self.llm, "requests_used", state.llm_requests_used)
         state.status = "researched"
         return state
