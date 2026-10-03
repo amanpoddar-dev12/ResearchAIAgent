@@ -206,7 +206,8 @@ async def chat_research(research_id: str, request: ChatRequest) -> ChatResponse:
     if not job or not job.state:
         raise LookupError("Research result not found")
     async with job.chat_lock:
-        if job.chat_router is None:
-            job.chat_router = LLMRouter(Settings(), max_requests=12)
+        # Each user question has its own bounded attempts, including repairs/retries.
+        # Reusing an exhausted lifetime budget made later questions fail permanently.
+        job.chat_router = LLMRouter(Settings(), max_requests=6)
         job.chat_router.deadline = time.monotonic() + 30
         return await asyncio.to_thread(answer_chat, job.chat_router, request, job.state)
