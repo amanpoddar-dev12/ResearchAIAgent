@@ -17,7 +17,8 @@ class ScoreBreakdown(BaseModel):
 
 
 def score_finding(state: ResearchState, finding: Finding) -> ScoreBreakdown:
-    evidence = [item for item in state.evidence if item.id in finding.evidence_ids]
+    from app.evidence import linked_evidence
+    evidence = linked_evidence(state, finding)
     sources = {source.id: source for source in state.sources}
     if not evidence:
         return ScoreBreakdown(source_quality=0, evidence_relevance=0, source_agreement=0,
@@ -26,8 +27,8 @@ def score_finding(state: ResearchState, finding: Finding) -> ScoreBreakdown:
     quality = [sources[item.source_id].quality.total for item in evidence if item.source_id in sources and sources[item.source_id].quality]
     relevance = [item.relevance_score for item in evidence]
     freshness = [item.freshness_score for item in evidence]
-    support = sum(item.relation == "supports" for item in evidence)
-    contradict = sum(item.relation == "contradicts" for item in evidence)
+    support = len({sources[item.source_id].domain for item in evidence if item.relation == "supports" and item.source_id in sources})
+    contradict = len({sources[item.source_id].domain for item in evidence if item.relation == "contradicts" and item.source_id in sources})
     agreement = support / max(1, support + contradict)
     validity = sum(item.source_id in sources for item in evidence) / len(evidence)
     verification = 1.0 if finding.evidence_status == "Supported" else .5 if finding.evidence_status == "Partially Supported" else 0.0
@@ -40,5 +41,7 @@ def score_finding(state: ResearchState, finding: Finding) -> ScoreBreakdown:
         "verification_agreement": verification,
     }
     score = sum(factors.values()) / len(factors)
+    if finding.evidence_status == "Unverified":
+        score = min(score, .25)
     return ScoreBreakdown(**factors, score=round(score, 4),
-        formula="Average of source quality, evidence relevance, source agreement, freshness, citation validity, and verification agreement. Estimate, not probability of truth.")
+        formula="Average of source quality, evidence relevance, agreement by distinct domain, freshness, citation validity, and verification agreement; Unverified claims capped at 0.25. Estimate, not probability of truth.")

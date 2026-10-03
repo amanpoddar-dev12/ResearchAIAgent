@@ -32,23 +32,29 @@ class Extractor:
         if not sources:
             return ClaimExtraction()
         if getattr(self.llm, "supports_task_routing", False):
-            def extract_one(source: Source) -> ClaimExtraction:
-                summary = invoke_structured(
-                    self.llm,
-                    SOURCE_SUMMARY_PROMPT.format(source_id=source.id, title=source.title, content=source.content[:5_000]),
-                    SourceSummary,
-                    task=SOURCE_SUMMARY,
-                )
-                source.summary = summary.summary
-                prompt = CLAIM_EXTRACTION.format(question=question, source_id=source.id,
-                                                 content=source.content[:30_000]) + f"\nSource summary: {summary.summary}\n{strategy}"
-                return invoke_structured(self.llm, prompt, ClaimExtraction, task=EVIDENCE_EXTRACTION)
-            with ThreadPoolExecutor(max_workers=min(3, len(sources))) as executor:
-                results = list(executor.map(extract_one, sources))
             merged = ClaimExtraction()
-            for result in results:
+            # Bounded batches share context once; one failed batch cannot erase prior results.
+            for offset in range(0, len(sources), 3):
+                batch = sources[offset:offset + 3]
+                text = "\n\n".join(f"--- {source.id} | {source.title} ---\nSub-questions: {source.sub_question_ids}\n{source.content[:10000]}" for source in batch)
+                try:
+                    result = invoke_structured(self.llm, BATCH_CLAIM_EXTRACTION.format(question=question, sources=text) + strategy,
+                                               ClaimExtraction, task=EVIDENCE_EXTRACTION)
+                except (RuntimeError, ValueError, TypeError, TimeoutError):
+                    logger.warning("Extraction unavailable for batch %s", offset // 3)
+                    continue
+                prefix = f"batch{offset}:"
+                claim_ids = {claim.id for claim in result.findings}
+                for item in result.evidence:
+                    item.id = prefix + item.id
+                for claim in result.findings:
+                    claim.id = prefix + claim.id
+                    claim.evidence_ids = [prefix + key for key in claim.evidence_ids]
+                    claim.depends_on = [prefix + key if key in claim_ids else key for key in claim.depends_on]
                 merged.findings.extend(result.findings)
                 merged.evidence.extend(result.evidence)
+                merged.data_points.extend(result.data_points)
+                merged.processed_source_ids.extend(source.id for source in batch)
             return merged
         source_text = "\n\n".join(
             f"--- {source.id} | {source.title} | {source.url} ---\nRetrieved for sub-questions: {source.sub_question_ids}\n{source.content[:5_000]}"

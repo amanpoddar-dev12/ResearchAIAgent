@@ -69,7 +69,7 @@ def test_conflict_is_present_in_final_report():
     assert "The result" in report
 
 
-def test_routed_extraction_calls_summary_and_evidence_once_per_source():
+def test_routed_extraction_combines_source_work_in_one_call():
     class RoutedFake:
         supports_task_routing = True
 
@@ -87,7 +87,7 @@ def test_routed_extraction_calls_summary_and_evidence_once_per_source():
     source = state_with_source().sources[0]
     result = Extractor(fake).extract_evidence("What happened?", [source])
     assert result.findings == []
-    assert fake.tasks == ["source_summary", "evidence_extraction"]
+    assert fake.tasks == ["evidence_extraction"]
 
 
 def test_routed_data_point_extraction_keeps_only_verbatim_points():

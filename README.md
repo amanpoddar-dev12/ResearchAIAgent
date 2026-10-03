@@ -42,7 +42,7 @@ python main.py "What are the major developments in humanoid robots in 2026?"
 python main.py "AI coding agents in 2026" --max-searches 8 --max-sources 12 --max-iterations 4
 ```
 
-Research depth is available through the API as `quick`, `standard` (default), or `deep`. These modes bound searches, sources, iterations, and model requests; all remain subject to the global environment safety limits.
+Research modes are available through the API as `quick`, `standard` (legacy default), `deep`, `technical`, `academic`, `fact_check`, and `compare`. Session budget overrides remain capped by the configured environment limits (`app/agent.py`, `app/researcher.py`).
 
 Reports are saved under `reports/` and printed to the terminal.
 
@@ -56,19 +56,33 @@ Question -> Planner -> bounded Research Loop -> Tavily/Webpage
 
 The routed `LLMClient` and `search_web` function are adapters, so orchestration does not depend on any provider SDK. Tavily remains the only web search provider.
 
+The production pipeline refines and plans with Gemini, batches document extraction with Groq, evaluates individual claim/evidence relationships with Gemini, and independently challenges selected claims with Mistral outside Quick mode. Review disagreement leaves the relationship unverified. Gemini drafts analytical report blocks; Mistral reviews those blocks before publication. Numeric observations require verbatim quoted provenance; charts never fill missing measurements (`app/agent.py`, `app/extractor.py`, `app/evidence.py`, `app/synthesizer.py`).
+
+Search waves rank candidates before spending the source cap. Document retrieval prioritizes the strongest candidates, reuses session documents, and can follow links from reference sections to close measured gaps. Collection stops on coverage, useful-evidence plateau, time/search/source/iteration limits, or the collection LLM budget; final review and synthesis receive reserved requests. Every HTTP retry and JSON repair consumes the same physical-request budget. Provider-reported token usage is recorded when available (`app/researcher.py`, `tools/webpage.py`, `app/llm/router.py`).
+
+Source-quality scores are transparent heuristics, not verified authority or probabilities of truth. Distinct domains are a proxy for corroboration, not proof of publisher independence. Unsupported or incomplete research remains labelled partial; the model cannot assign the final evidence status directly (`app/source_quality.py`, `app/scoring.py`, `app/research_control.py`).
+
 ## Limitations
 
 Search coverage and source quality vary; LLM reasoning can be wrong; citations should be checked for important work; this is not a substitute for professional research. Web pages can contain prompt injection, so their text is passed as evidence only and never as application instructions.
 
-## Future improvements
-
-Persistent research memory, PDF output, browser automation, scheduled runs, richer source ranking, knowledge graphs, and a UI can be added when the use case justifies them.
+Backend jobs, documents, evidence, replay buffers, and chat budgets are process-local and temporary. The service admits up to three active jobs and retains at most twenty sessions, with completed sessions expiring after thirty minutes. A restart loses sessions; independent workers do not share them. Webpage extraction supports bounded HTML/plain text; PDF documents are not parsed (`server/api/research.py`, `tools/webpage.py`).
 
 ## Tests
 
 ```powershell
 pytest -q
 ```
+
+Frontend regression tests and type-checking (from `frontend/`):
+
+```powershell
+node --test tests/*.test.mjs
+./node_modules/.bin/tsc.cmd --noEmit -p tsconfig.app.json
+npm run build
+```
+
+The offline tests use explicitly synthetic sources and no paid provider calls. No lint script is configured in `frontend/package.json`.
 
 ## Web frontend
 
@@ -86,6 +100,8 @@ npm run dev
 ```
 
 Open http://localhost:5173. The browser never receives Gemini or Tavily credentials. `POST /api/research` starts a job and `GET /api/research/{research_id}/stream` streams real planning, search, source, finding, gap, and completion events.
+
+SSE subscriptions independently replay retained events using `Last-Event-ID` or `?after=<sequence>`. An older cursor recovers the latest snapshot or terminal outcome. `GET /api/research/{research_id}/status` distinguishes running, complete, and failed sessions; `POST /api/research/{research_id}/cancel` cancels the session. The frontend reconnects to the existing job without starting another research run. Original event names and payloads remain compatible; sequence/progress metadata and new state fields are additive (`server/main.py`, `server/api/research.py`, `frontend/src/services/api.ts`).
 
 During local development, browser requests use same-origin `/api` URLs and Vite proxies them to `VITE_BACKEND_URL` (default `http://127.0.0.1:8001`). Start FastAPI on port 8001 when using the local backend, and restart Vite after changing the port. `VITE_API_URL` applies to production builds only: set it to the public FastAPI backend URL, not the frontend website URL, when deploying separately.
 Set the backend's `CORS_ORIGINS` environment variable to the exact deployed frontend

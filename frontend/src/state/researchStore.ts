@@ -37,7 +37,8 @@ export function researchReducer(state: ResearchSession, event: ResearchEvent | {
   const sequence = researchEvent.sequence;
   if (sequence !== undefined && state.events.some((item) => item.research_id === researchEvent.research_id && item.sequence === sequence)) return state;
   if (sequence !== undefined && state.events.some((item) => item.research_id === researchEvent.research_id && item.sequence !== undefined && item.sequence > sequence)) return state;
-  const next: ResearchSession = { ...state, events: [...state.events, researchEvent] };
+  const logEvent = ["research_snapshot", "complete", "report_generated"].includes(researchEvent.type) ? { ...researchEvent, data: undefined } : researchEvent;
+  const next: ResearchSession = { ...state, events: [...state.events.slice(-511), logEvent] };
   if (researchEvent.type === "research_started") next.status = "researching";
   if (researchEvent.type === "source_found") next.sources = upsert(state.sources, researchEvent.data as ResearchSource, (item) => item.id);
   if (researchEvent.type === "claim_extracted" || researchEvent.type === "finding_extracted") next.findings = upsert(state.findings, researchEvent.data as Finding, (item) => item.id);

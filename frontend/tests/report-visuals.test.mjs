@@ -69,6 +69,12 @@ test("charts with absent measurements or unresolved citations are honestly withh
   }
 });
 
+function mockGlobal(t, key, value) {
+  const original = Object.getOwnPropertyDescriptor(globalThis, key);
+  Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
+  t.after(() => original ? Object.defineProperty(globalThis, key, original) : delete globalThis[key]);
+}
+
 class FakeSvgElement {
   constructor(tag) { this.tag = tag; this.attributes = {}; this.children = []; this.textContent = ""; this.styles = {}; this.style = { setProperty: (key, value) => { this.styles[key] = value; } }; }
   setAttribute(key, value) { this.attributes[key] = value; }
@@ -80,9 +86,9 @@ class FakeSvgElement {
 
 test("SVG export contains chart surface, inherited styles, caption, legend and source references", (t) => {
   let serialized;
-  t.mock.method(globalThis, "getComputedStyle", () => ({ color: "#112233", backgroundColor: "#ffffff", getPropertyValue: (name) => name === "stroke" ? "#4f46e5" : name === "font-size" ? "11px" : "" }), { create: true });
-  t.mock.method(globalThis, "document", { createElementNS: (_, tag) => new FakeSvgElement(tag) }, { create: true });
-  t.mock.method(globalThis, "XMLSerializer", class { serializeToString(node) { serialized = node; return "<svg>synthetic</svg>"; } }, { create: true });
+  mockGlobal(t, "getComputedStyle", () => ({ color: "#112233", backgroundColor: "#ffffff", getPropertyValue: (name) => name === "stroke" ? "#4f46e5" : name === "font-size" ? "11px" : "" }));
+  mockGlobal(t, "document", { createElementNS: (_, tag) => new FakeSvgElement(tag) });
+  mockGlobal(t, "XMLSerializer", class { serializeToString(node) { serialized = node; return "<svg>synthetic</svg>"; } });
   const surface = new FakeSvgElement("svg"); surface.append(new FakeSvgElement("path"));
   const result = serializeChartSvg(surface, chart, sources);
   assert.equal(result.width, 648); assert.ok(result.height > 320);
@@ -98,8 +104,8 @@ test("PNG uses the same serialized SVG at double resolution and releases its URL
   let drawn, released, payload;
   const png = new Blob(["synthetic png"], { type: "image/png" });
   const canvas = { width: 0, height: 0, getContext: () => ({ drawImage: (...args) => { drawn = args; } }), toBlob: (callback) => callback(png) };
-  t.mock.method(globalThis, "document", { createElement: () => canvas }, { create: true });
-  t.mock.method(globalThis, "Image", class { set src(value) { this.url = value; queueMicrotask(() => this.onload()); } }, { create: true });
+  mockGlobal(t, "document", { createElement: () => canvas });
+  mockGlobal(t, "Image", class { set src(value) { this.url = value; queueMicrotask(() => this.onload()); } });
   t.mock.method(URL, "createObjectURL", (blob) => { payload = blob; return "blob:synthetic"; });
   t.mock.method(URL, "revokeObjectURL", (url) => { released = url; });
   assert.equal(await chartPng({ content: "<svg>SYNTHETIC</svg>", width: 600, height: 400 }), png);

@@ -38,13 +38,17 @@ export async function askResearch(id: string, message: string, context: { claim_
 }
 
 export function streamResearch(id: string, onEvent: (event: ResearchEvent) => void, onError: (error: Error) => void): () => void {
-  const source = new EventSource(`${API_URL}/api/research/${id}/stream`);
+  let source: EventSource;
+  let sequence = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  let connectionFailures = 0;
   let stopped = false;
   let recovering = false;
   let recoveryController: AbortController | undefined;
   const stop = () => {
     stopped = true;
     source.close();
+    clearTimeout(reconnectTimer);
     recoveryController?.abort();
   };
   const recoverResult = async () => {
@@ -71,11 +75,30 @@ export function streamResearch(id: string, onEvent: (event: ResearchEvent) => vo
         } else if (response.status !== 404) {
           break;
         }
+        const statusResponse = await apiRequest(`${API_URL}/api/research/${id}/status`, { signal: controller.signal });
+        if (stopped) return;
+        if (statusResponse.ok) {
+          const status = await statusResponse.json() as { status: string; error?: string };
+          if (stopped) return;
+          if (status.status === "running") {
+            reconnectTimer = setTimeout(connect, 1000);
+            return;
+          }
+          if (status.status === "failed") {
+            stop();
+            onError(new Error(status.error || "The research session failed."));
+            return;
+          }
+        }
         // research_completed may arrive just before the result becomes available.
         if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 300));
       }
     } catch {
       // Cancellation or a normal terminal SSE event must not become an error.
+      if (!stopped && ++connectionFailures <= 5) {
+        reconnectTimer = setTimeout(connect, Math.min(8000, 1000 * 2 ** connectionFailures));
+        return;
+      }
     } finally {
       clearTimeout(timeout);
       recovering = false;
@@ -85,20 +108,32 @@ export function streamResearch(id: string, onEvent: (event: ResearchEvent) => vo
       onError(new Error(`The research connection to ${backendHint} ended before a completed report could be retrieved. Retry the research session.`));
     }
   };
-  source.onmessage = (message) => {
+  const connect = () => {
     if (stopped) return;
-    let event: ResearchEvent;
-    try {
-      event = JSON.parse(message.data) as ResearchEvent;
-    } catch { stop(); onError(new Error("Received malformed research event.")); return; }
-    if (["complete", "research_failed"].includes(event.type)) stop();
-    onEvent(event);
-    if (event.type === "research_completed") void recoverResult();
+    source = new EventSource(`${API_URL}/api/research/${id}/stream${sequence ? `?after=${sequence}` : ""}`);
+    source.onmessage = (message) => {
+      if (stopped) return;
+      let event: ResearchEvent;
+      try {
+        event = JSON.parse(message.data) as ResearchEvent;
+      } catch { stop(); onError(new Error("Received malformed research event.")); return; }
+      sequence = Math.max(sequence, event.sequence || 0);
+      connectionFailures = 0;
+      if (["complete", "research_failed"].includes(event.type)) stop();
+      onEvent(event);
+      if (event.type === "research_completed") void recoverResult();
+    };
+    source.onerror = () => {
+      if (stopped) return;
+      source.close();
+      void recoverResult();
+    };
   };
-  source.onerror = () => {
-    if (stopped) return;
-    source.close();
-    void recoverResult();
-  };
+  connect();
   return stop;
+}
+
+export async function cancelResearch(id: string): Promise<void> {
+  const response = await apiRequest(`${API_URL}/api/research/${id}/cancel`, { method: "POST" });
+  if (!response.ok) throw new Error("The research session could not be cancelled.");
 }

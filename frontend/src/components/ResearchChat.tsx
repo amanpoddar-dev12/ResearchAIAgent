@@ -20,7 +20,7 @@ export function ResearchChat({ researchId, state, findings, evidence, sources, o
     if (findings.some((finding) => finding.evidence_status === "Unverified" || finding.evidence_status === "Partially Supported")) items.push("Which claims need more verification?");
     return items.slice(0, 5);
   }, [state, findings]);
-  const context = { claim_ids: findings.slice(0, 6).map((item) => item.id).filter((id): id is string => Boolean(id)) };
+  const context = {};
   const submit = async (value = input) => {
     const message = value.trim();
     if (!message || loading) return;

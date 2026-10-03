@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import random
+import threading
 from typing import Any
 
 import httpx
@@ -25,6 +26,14 @@ class HTTPProvider:
         self.model = model
         self.timeout = timeout
         self.max_retries = max_retries
+        self.before_retry = lambda task: None
+        self.remaining_time = lambda: float("inf")
+        self.record_usage = lambda task, values: None
+        self._local = threading.local()
+
+    def _request_for_task(self, task, messages, temperature, max_tokens):
+        self._local.task = task
+        return self._request(messages, temperature, max_tokens)
 
     def _request(self, messages: list[dict[str, str]], temperature: float, max_tokens: int | None) -> tuple[str, int | None]:
         raise NotImplementedError
@@ -32,16 +41,21 @@ class HTTPProvider:
     async def complete(self, messages: list[dict[str, str]], *, task: str,
                        temperature: float, max_tokens: int | None) -> str:
         for attempt in range(self.max_retries + 1):
+            if attempt:
+                self.before_retry(task)
+            remaining = min(self.timeout, self.remaining_time())
+            if remaining <= 0:
+                raise ProviderTimeoutError(self.provider, task, "session deadline reached")
             try:
                 text, status = await asyncio.wait_for(
-                    asyncio.to_thread(self._request, messages, temperature, max_tokens),
-                    timeout=self.timeout,
+                    asyncio.to_thread(self._request_for_task, task, messages, temperature, max_tokens),
+                    timeout=remaining,
                 )
                 return text
-            except httpx.TimeoutException as exc:
+            except (httpx.TimeoutException, TimeoutError) as exc:
                 if attempt >= self.max_retries:
                     raise ProviderTimeoutError(self.provider, task, "request timed out") from exc
-                await asyncio.sleep(self._backoff(attempt))
+                await asyncio.sleep(min(self._backoff(attempt), self.remaining_time()))
             except ProviderRateLimitError as exc:
                 if exc.task != task:
                     wrapped = ProviderRateLimitError(exc.provider, task, "rate limit reached", exc.status_code)
@@ -49,17 +63,17 @@ class HTTPProvider:
                     exc = wrapped
                 if attempt >= self.max_retries:
                     raise
-                await asyncio.sleep(self._retry_after(exc, attempt))
+                await asyncio.sleep(min(self._retry_after(exc, attempt), self.remaining_time()))
             except ProviderTimeoutError as original:
                 exc = ProviderTimeoutError(self.provider, task, "request timed out")
                 if attempt >= self.max_retries:
                     raise exc from original
-                await asyncio.sleep(self._backoff(attempt))
+                await asyncio.sleep(min(self._backoff(attempt), self.remaining_time()))
             except ProviderResponseError as exc:
                 if exc.task != task:
                     exc = ProviderResponseError(exc.provider, task, "provider request failed", exc.status_code)
-                if exc.status_code is not None and exc.status_code >= 500 and attempt < self.max_retries:
-                    await asyncio.sleep(self._backoff(attempt))
+                if (exc.status_code is None or exc.status_code >= 500) and attempt < self.max_retries:
+                    await asyncio.sleep(min(self._backoff(attempt), self.remaining_time()))
                     continue
                 raise
             except ProviderAuthError:
@@ -71,11 +85,14 @@ class HTTPProvider:
 
     def _retry_after(self, error: ProviderRateLimitError, attempt: int) -> float:
         retry_after = getattr(error, "retry_after", None)
-        return float(retry_after) if retry_after is not None else self._backoff(attempt)
+        try:
+            return max(0, min(60, float(retry_after))) if retry_after is not None else self._backoff(attempt)
+        except (TypeError, ValueError):
+            return self._backoff(attempt)
 
     def _post_json(self, headers: dict[str, str], payload: dict[str, Any]) -> tuple[str, int | None]:
         try:
-            response = httpx.post(self.endpoint, headers=headers, json=payload, timeout=self.timeout)
+            response = httpx.post(self.endpoint, headers=headers, json=payload, timeout=min(self.timeout, self.remaining_time()))
         except httpx.TimeoutException as exc:
             raise ProviderTimeoutError(self.provider, "http_request", "request timed out") from exc
         except httpx.HTTPError as exc:
@@ -93,6 +110,7 @@ class HTTPProvider:
             raise ProviderResponseError(self.provider, "http_request", "provider rejected the request", status)
         try:
             data = response.json()
+            self.record_usage(getattr(self._local, "task", "unknown"), data.get("usage") or data.get("usageMetadata"))
             return self._extract_text(data), status
         except (ValueError, KeyError, TypeError) as exc:
             raise ProviderResponseError(self.provider, "http_request", "provider returned invalid JSON", status) from exc
@@ -116,8 +134,11 @@ class GeminiProvider(HTTPProvider):
         self.endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
     def _request(self, messages, temperature, max_tokens):
-        contents = [{"role": "user", "parts": [{"text": item["content"]}]} for item in messages]
+        contents = [{"role": "model" if item["role"] == "assistant" else "user", "parts": [{"text": item["content"]}]} for item in messages if item["role"] != "system"]
         payload: dict[str, Any] = {"contents": contents, "generationConfig": {"temperature": temperature}}
+        instructions = [item["content"] for item in messages if item["role"] == "system"]
+        if instructions:
+            payload["systemInstruction"] = {"parts": [{"text": "\n".join(instructions)}]}
         if max_tokens is not None:
             payload["generationConfig"]["maxOutputTokens"] = max_tokens
         return self._post_json({"Content-Type": "application/json", "x-goog-api-key": self.api_key}, payload)

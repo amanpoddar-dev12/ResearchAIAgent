@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { Globe, Search } from "lucide-react";
-import type { ResearchSource } from "../types/research";
+import type { ResearchSource, Conflict } from "../types/research";
 
-export function SourceList({ sources, onPreview }: { sources: ResearchSource[]; onPreview: (source: ResearchSource) => void }) {
+export function SourceList({ sources, onPreview, conflicts = [] }: { sources: ResearchSource[]; onPreview: (source: ResearchSource) => void; conflicts?: Conflict[] }) {
   const [sort, setSort] = useState("quality");
   const [domain, setDomain] = useState("");
   const [type, setType] = useState("");
@@ -14,7 +14,7 @@ export function SourceList({ sources, onPreview }: { sources: ResearchSource[]; 
   const visible = sources.filter((source) => {
     const date = source.publication_date ? Date.parse(source.publication_date) : NaN;
     return (!query || `${source.title} ${source.domain}`.toLowerCase().includes(query.toLowerCase())) &&
-      (!qualityFilter || (qualityFilter === "high" ? (source.quality?.total ?? 0) >= 0.7 : qualityFilter === "conflicting" ? false : source.source_type === qualityFilter)) &&
+      (!qualityFilter || (qualityFilter === "high" ? (source.quality?.total ?? 0) >= 0.7 : qualityFilter === "conflicting" ? conflicts.some((conflict) => [...conflict.source_a, ...conflict.source_b].includes(source.id)) : source.source_type === (qualityFilter === "official" ? "primary" : qualityFilter === "technical" ? "documentation" : qualityFilter))) &&
       (!domain || source.domain === domain) && (!type || source.source_type === type) &&
       (source.quality?.total ?? 0) * 100 >= quality &&
       (!from || Number.isFinite(date) && date >= Date.parse(from)) &&

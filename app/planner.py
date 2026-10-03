@@ -35,8 +35,10 @@ class Planner:
         instructions += "\nProvide sub_question_tasks with unique Q IDs, question, query, and depends_on Q IDs for genuine prerequisites only. Independent tasks have no dependencies."
         if question.target_claims:
             instructions += f"\nSpecific claims to verify: {question.target_claims}"
+            instructions += " For each target seek both confirmation and refutation, preserving dates, population and causal scope."
         if question.comparison_items:
             instructions += f"\nItems to compare against common criteria: {question.comparison_items}"
+            instructions += " Define common criteria first; cover each item-criterion cell with matched units, population, period and methodology."
         try:
             plan = invoke_structured(
                 self.llm,
@@ -45,14 +47,15 @@ class Planner:
                 task=PLANNING_TASK,
             )
             plan.search_queries = list(dict.fromkeys(plan.search_queries))[:mode.queries]
+            plan.sub_question_tasks = plan.sub_question_tasks[:mode.queries]
             return plan
         except (RuntimeError, ValueError) as exc:
             logger.warning("Using deterministic fallback plan: %s", exc)
             return ResearchPlan(
                 objective=question.question,
-                research_areas=["Recent developments", "Evidence and deployments", "Limitations and outlook"],
+                research_areas=["Background and scope", "Primary evidence", "Limitations and disagreements"],
                 sub_questions=[
-                    f"What are the latest documented developments related to {question.question}?",
+                    f"What documented evidence addresses {question.question}?",
                     f"Which primary or reputable sources provide evidence about {question.question}?",
                     f"What limitations or disagreements exist in the evidence about {question.question}?",
                 ],

@@ -4,19 +4,17 @@ from concurrent.futures import ThreadPoolExecutor
 import time
 from app.config import Settings
 from app.llm import LLMRouter, invoke_structured
-from app.llm.routing import EVIDENCE_EVALUATION, FINAL_VERIFICATION, INDEPENDENT_REVIEW, QUESTION_ANALYSIS
-from pydantic import BaseModel, Field
+from app.llm.routing import INDEPENDENT_REVIEW, QUESTION_ANALYSIS
 from app.models import (ResearchQuestion, ResearchState, SourceFilters, BudgetOverrides, ResearchPlan,
-    ReportDraft, QuestionAnalysis, VerificationBatch, ReviewBatch)
+    ReportDraft, QuestionAnalysis, Verification, EvidenceAssessmentBatch, ConflictAssessment, ResearchGap)
 from app.modes import MODES, ModeName
-from app.evidence import reject, source_rejection, evidence_conflicts, validate_evidence
+from app.evidence import reject, source_rejection, evidence_conflicts, validate_evidence, apply_assessments
 from app.planner import Planner, refine_question
 from app.researcher import Researcher
 from app.synthesizer import Synthesizer, build_structured_report, render_report
-from app.research_control import audit, bounded_call
-from app.scoring import score_finding
-from app.prompts import (EVIDENCE_RULES, EVIDENCE_EVALUATION as EVIDENCE_EVALUATION_PROMPT,
-    INDEPENDENT_REVIEW as INDEPENDENT_REVIEW_PROMPT, QUESTION_ANALYSIS as QUESTION_ANALYSIS_PROMPT)
+from app.research_control import audit, bounded_call, coverage_gaps
+from app.prompts import (EVIDENCE_EVALUATION as EVIDENCE_EVALUATION_PROMPT,
+    QUESTION_ANALYSIS as QUESTION_ANALYSIS_PROMPT)
 
 
 GeminiClient = LLMRouter
@@ -40,16 +38,19 @@ class ResearchAgent:
         state = ResearchState(question=ResearchQuestion(question=question, mode=mode,
             target_claims=target_claims or ([question] if mode == "fact_check" else []), comparison_items=comparison_items or []),
             mode=mode, filters=filters or SourceFilters(), max_llm_requests=self.llm.max_requests,
-            max_searches=overrides.max_searches or min(self.settings.max_searches, config.queries),
-            max_sources=overrides.max_sources or min(self.settings.max_sources, config.sources),
-            max_iterations=overrides.max_iterations or min(self.settings.max_iterations, config.iterations),
-            max_parallel_tasks=overrides.max_parallel_tasks or min(self.settings.max_parallel_tasks, config.parallel_tasks),
-            max_wall_seconds=overrides.max_wall_seconds or min(self.settings.max_wall_seconds, config.wall_seconds),
+            max_searches=min(self.settings.max_searches, overrides.max_searches or config.queries),
+            max_sources=min(self.settings.max_sources, overrides.max_sources or config.sources),
+            max_iterations=min(self.settings.max_iterations, overrides.max_iterations or config.iterations),
+            max_parallel_tasks=min(self.settings.max_parallel_tasks, overrides.max_parallel_tasks or config.parallel_tasks),
+            max_wall_seconds=min(self.settings.max_wall_seconds, overrides.max_wall_seconds or config.wall_seconds),
             budget_overrides=overrides, llm_model=self.llm.model_name, provenance_required=True)
         executor = ThreadPoolExecutor(max_workers=state.max_parallel_tasks)
         started = time.monotonic()
         deadline = started + state.max_wall_seconds
         self.llm.deadline = deadline
+        self.llm.reserved_final_calls = min(3, max(0, self.llm.max_requests - 2))
+        state.semantic_validation_required = bool(getattr(self.llm, "supports_task_routing", False))
+        state.relevance_threshold = config.relevance_threshold
         try:
             return asyncio.run(self._run(state, emit or (lambda *_: None), executor, started, deadline))
         finally:
@@ -72,6 +73,7 @@ class ResearchAgent:
                 state.question.assumptions = list(dict.fromkeys(state.question.assumptions + analysis.assumptions))
                 state.question.ambiguities = list(dict.fromkeys(state.question.ambiguities + analysis.ambiguities))
                 audit(state, "question_analysis", analysis.refined_question, ambiguities=analysis.ambiguities)
+                emit("question_refined", "Research scope refined", state.question.model_dump())
             except (TimeoutError, RuntimeError, ValueError):
                 audit(state, "question_analysis_failed", "Question analysis unavailable; continuing with deterministic refinement")
         try:
@@ -90,7 +92,9 @@ class ResearchAgent:
         emit("research_progress", "Checking conflicts", {"phase": "conflicts", "progress": 75})
         state.conflicts = evidence_conflicts(state)
         try:
-            assessment = await bounded_call(executor, deadline, self.synthesizer.detect_conflicts, state.model_copy(deep=True))
+            assessment = ConflictAssessment()
+            if not getattr(self.llm, "supports_task_routing", False):
+                assessment = await bounded_call(executor, deadline, self.synthesizer.detect_conflicts, state.model_copy(deep=True))
             for conflict in assessment.conflicts:
                 valid = True
                 for sid in conflict.source_a + conflict.source_b:
@@ -116,99 +120,64 @@ class ResearchAgent:
             audit(state, "analysis_failed", "Generated conflict analysis unavailable; retained evidence-derived conflicts")
         for conflict in state.conflicts:
             emit("conflict_detected", f"Conflict detected: {conflict.topic}", conflict)
-        if getattr(self.llm, "supports_task_routing", False) and state.mode != "quick" and state.findings:
-            try:
-                emit("verification_started", "Verifying claims against stored evidence")
-                verification_input = [
-                    {
-                        "claim_id": finding.id,
-                        "claim": finding.claim,
-                        "evidence": [item.model_dump(mode="json") for item in state.evidence if item.id in finding.evidence_ids],
-                    }
-                    for finding in state.findings if finding.evidence_ids
-                ]
-                evaluation = await bounded_call(
-                    executor, deadline, invoke_structured, self.llm,
-                    EVIDENCE_EVALUATION_PROMPT.format(claims=verification_input),
-                    VerificationBatch, task=EVIDENCE_EVALUATION,
-                )
-                review = await bounded_call(
-                    executor, deadline, invoke_structured, self.llm,
-                    INDEPENDENT_REVIEW_PROMPT.format(evaluations=evaluation.model_dump(mode="json")),
-                    ReviewBatch, task=INDEPENDENT_REVIEW,
-                )
-                final_verification = await bounded_call(
-                    executor, deadline, invoke_structured, self.llm,
-                    EVIDENCE_RULES + "Produce final verification results using only these claims, evidence, Gemini evaluations, and Mistral reviews. "
-                    "Return confirmed, weakened, refuted, or insufficient_evidence with a short rationale. "
-                    f"Claims and evidence: {verification_input}\nGemini evaluations: {evaluation.model_dump(mode='json')}\nMistral reviews: {review.model_dump(mode='json')}",
-                    VerificationBatch, task=FINAL_VERIFICATION,
-                )
-                verdicts = {item.claim_id: item for item in final_verification.results}
-                reviews = {item.claim_id: item for item in review.reviews}
-                valid_evidence = {item.id for item in state.evidence}
-                for finding in state.findings:
-                    result = verdicts.get(finding.id)
-                    if not result:
-                        continue
-                    if any(evidence_id not in valid_evidence for evidence_id in result.supporting_evidence_ids):
-                        audit(state, "verification_rejected", "Verification referenced unknown evidence", claim_id=finding.id)
-                        continue
-                    finding.confidence = min(finding.confidence, 1.0) if result.verdict == "confirmed" else (
-                        min(finding.confidence, .5) if result.verdict == "weakened" else 0.0
-                    )
-                    finding.evidence_status = {
-                        "confirmed": "Supported",
-                        "weakened": "Partially Supported",
-                        "refuted": "Contradicted",
-                        "insufficient_evidence": "Unverified",
-                    }[result.verdict]
-                    score = score_finding(state, finding)
-                    finding.confidence_score = score.score
-                    finding.score_source_quality = score.source_quality
-                    finding.score_evidence_relevance = score.evidence_relevance
-                    finding.score_source_agreement = score.source_agreement
-                    finding.score_freshness = score.freshness
-                    finding.score_citation_validity = score.citation_validity
-                    finding.score_verification_agreement = score.verification_agreement
-                    finding.score_formula = score.formula
-                    state.verifications.append(Verification(
-                        claim_id=finding.id, status=finding.evidence_status,
-                        supporting_count=len(finding.supporting_evidence_ids),
-                        contradicting_count=len(finding.contradicting_evidence_ids),
-                        verified_by=["gemini", "mistral"],
-                        reasoning=result.reasoning_summary,
-                        confidence_score=score.score,
-                        independent_review=reviews.get(finding.id).reasoning if reviews.get(finding.id) else None,
-                    ))
-                    audit(state, "fact_verification", result.verdict, claim_id=finding.id, issues=result.issues)
-                    event_type = {
-                        "Supported": "claim_verified",
-                        "Partially Supported": "claim_partially_verified",
-                        "Contradicted": "claim_contradicted",
-                        "Unverified": "claim_unverified",
-                    }[finding.evidence_status]
-                    emit(event_type, f"Claim {finding.evidence_status.lower()}", state.verifications[-1])
-                emit("verification_completed", "Claim verification completed", {"count": len(state.verifications)})
-            except (TimeoutError, RuntimeError, ValueError):
-                audit(state, "verification_unavailable", "Fact verification unavailable; retained evidence-derived statuses")
-                emit("verification_completed", "Independent verification unavailable", {"count": 0, "status": "unavailable"})
+        if getattr(self.llm, "supports_task_routing", False) and state.findings:
+            reviewed_claims = set()
+            if state.mode != "quick":
+                try:
+                    emit("verification_started", "Independently challenging claims against original evidence")
+                    claims = [{"claim_id": claim.id, "claim": claim.claim,
+                               "evidence": [item.model_dump() for item in state.evidence if item.id in claim.evidence_ids],
+                               "evaluations": [item.model_dump() for item in claim.evidence_assessments]}
+                              for claim in state.findings if claim.evidence_assessments and
+                              (claim.importance in {"high", "critical"} or claim.evidence_status != "Supported" or len(claim.source_ids) < 2)][:20]
+                    if claims:
+                        review = await bounded_call(executor, deadline, invoke_structured, self.llm,
+                            EVIDENCE_EVALUATION_PROMPT.format(claims=claims) + " Independently challenge scope and numerical accuracy.",
+                            EvidenceAssessmentBatch, task=INDEPENDENT_REVIEW)
+                        apply_assessments(state, review, challenge=True)
+                        reviewed_claims = {item.claim_id for item in review.assessments if any(claim["claim_id"] == item.claim_id and item.evidence_id in {e["id"] for e in claim["evidence"]} for claim in claims)}
+                except (TimeoutError, RuntimeError, ValueError):
+                    audit(state, "verification_unavailable", "Independent challenge unavailable; retained pair assessments")
+            validate_evidence(state)
+            state.verifications = []
+            for finding in state.findings:
+                verification = Verification(claim_id=finding.id, status=finding.evidence_status,
+                    supporting_count=len(finding.supporting_evidence_ids), contradicting_count=len(finding.contradicting_evidence_ids),
+                    verified_by=(["gemini"] if finding.evidence_assessments else []) + (["mistral"] if finding.id in reviewed_claims else []),
+                    reasoning="; ".join(item.reasoning for item in finding.evidence_assessments) or "Exact quotation or insufficient reviewed evidence.",
+                    confidence_score=finding.confidence_score)
+                state.verifications.append(verification)
+                event_type = {"Supported": "claim_verified", "Partially Supported": "claim_partially_verified",
+                              "Contradicted": "claim_contradicted", "Unverified": "claim_unverified"}[finding.evidence_status]
+                emit(event_type, "Evidence status derived from reviewed relationships", verification)
+            emit("verification_completed", "Evidence review complete", {"count": len(state.verifications)})
+            state.conflicts = evidence_conflicts(state)
+        coverage, remaining_gaps = coverage_gaps(state)
+        incomplete_stages = [gap for gap in state.unresolved_questions if gap == "Research ended before all analysis stages completed"]
+        state.unresolved_questions = list(dict.fromkeys([reason for _, reason, _ in remaining_gaps] + incomplete_stages))
+        if state.semantic_validation_required:
+            state.gaps = state.unresolved_questions[:]
+        if state.stop_decisions:
+            state.stop_decisions[-1].coverage = coverage
+            state.stop_decisions[-1].unresolved = state.unresolved_questions[:]
+        state.completion_quality = "partial" if state.unresolved_questions else "complete"
         emit("synthesis_started", "Writing final report")
         emit("research_progress", "Writing final report", {"phase": "synthesis", "progress": 85})
         try:
             synthesis_state = state.model_copy(deep=True)
-            synthesis_state.findings = [
-                finding for finding in synthesis_state.findings
-                if finding.evidence_status in {"Supported", "Partially Supported"}
-            ]
             draft = await bounded_call(executor, deadline, self.synthesizer.draft, synthesis_state)
         except TimeoutError:
             self.researcher.record_timeout(state, started)
             draft = ReportDraft(title=f"Research Report: {state.question.question}", executive_summary="", conclusion="", limitations=state.gaps)
+        state.completion_quality = "partial" if state.unresolved_questions else "complete"
+        state.research_gaps = [ResearchGap(gap_id=f"G{index}", description=gap,
+            importance="high" if "Unverified" in gap or "no evidence" in gap.lower() else "medium",
+            reason=gap, recommended_search=gap.split(":", 1)[-1].strip()) for index, gap in enumerate(state.gaps, 1)]
         state.structured_report = build_structured_report(draft, state)
         state.final_report = render_report(draft, state)
         state.elapsed_seconds = time.monotonic() - started
         state.llm_requests_used = self.llm.requests_used
+        state.llm_usage = getattr(self.llm, "usage", {})
         state.status = "complete"
         emit("research_snapshot", "Research state finalized", state.model_dump(mode="json", exclude={"sources": {"__all__": {"content"}}}))
         emit("report_generated", "Final report generated", state.final_report)
