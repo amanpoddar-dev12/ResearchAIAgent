@@ -13,7 +13,7 @@ export interface CitationRejection { claim_id: string; source_id?: string; evide
 export interface ResearchRequest { question: string; depth: Depth; max_sources: number; mode?: ResearchMode; filters?: SourceFilters; target_claims?: string[]; comparison_items?: string[]; budgets?: ResearchBudgets }
 export interface ResearchSource { id: string; title: string; url: string; domain: string; content?: string; summary?: string; publication_date?: string; source_type?: string; search_query?: string; quality?: SourceQuality; relevance_score?: number; authority_score?: number; freshness_score?: number; quality_score_value?: number }
 export interface Finding { claim: string; explanation: string; source_ids: string[]; confidence: number; confidence_score?: number; relevance?: number; importance?: "low" | "medium" | "high" | "critical"; supporting_evidence_ids?: string[]; contradicting_evidence_ids?: string[]; score_source_quality?: number; score_evidence_relevance?: number; score_source_agreement?: number; score_freshness?: number; score_citation_validity?: number; score_verification_agreement?: number; score_formula?: string; category: string; id?: string; evidence_ids?: string[]; evidence_status?: "Supported" | "Partially Supported" | "Contradicted" | "Unverified"; comparison_item?: string; comparison_criterion?: string; depends_on?: string[]; dependency_rejected?: boolean; sub_question_ids?: string[] }
-export interface Conflict { topic: string; claim_a: string; claim_b: string; source_a: string[]; source_b: string[]; explanation: string }
+export interface Conflict { topic: string; claim_a: string; claim_b: string; source_a: string[]; source_b: string[]; explanation: string; claim_ids?: string[]; evidence_ids?: string[]; severity?: "minor" | "major"; resolution?: "resolved" | "unresolved" }
 export interface ResearchPlan { objective: string; sub_questions: string[]; search_queries: string[]; research_areas: string[] }
 export interface ReportSection { id: string; title: string; content: string }
 export interface ChartSeries { key: string; label: string; color?: string | null }
@@ -32,3 +32,9 @@ export interface AuditEntry { id: number; timestamp: string; action: string; mes
 export interface ResearchGraphData { nodes: { id: string; type: string; label: string; status?: string }[]; edges: { source: string; target: string; type: string }[] }
 export interface ChatCitation { citation_id: string; source_id?: string | null; claim_id?: string | null; evidence_id?: string | null; title: string; url?: string | null; supporting_text?: string | null }
 export interface ChatResponse { intent: string; answer: string; citations: ChatCitation[]; related_claims: string[]; related_evidence: string[]; related_sources: string[]; confidence?: number | null; limitations: string[]; follow_up_questions: string[] }
+
+export interface EvidenceAssessment { claim_id: string; evidence_id: string; relation: Evidence["relation"]; strength: Evidence["strength"]; reasoning: string }
+export interface DataPoint { id: string; source_id: string; label: string; value: number; unit: string; observation: string; quote: string; estimated: boolean }
+export interface ReportBlock { id: string; section_id: string; kind: "observation" | "comparison" | "interpretation"; text: string; claim_ids: string[]; evidence_ids: string[]; limitations: string }
+export interface Finding { evidence_assessments?: EvidenceAssessment[] }
+export interface ResearchState { relevance_threshold?: number; completion_quality?: "complete" | "partial"; data_points?: DataPoint[]; report_blocks?: ReportBlock[]; llm_usage?: Record<string, { attempts: number; input_tokens: number; output_tokens: number; usage_reported: boolean }> }

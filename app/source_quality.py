@@ -25,7 +25,7 @@ def infer_source_type(source: Source) -> SourceType:
     host = (urlsplit(source.url).hostname or "").lower()
     path = urlsplit(source.url).path.lower()
     text = (source.title + " " + source.content[:2000]).lower()
-    if host.endswith(".edu") or host in {"arxiv.org", "pubmed.ncbi.nlm.nih.gov", "pmc.ncbi.nlm.nih.gov"} or "doi.org" == host:
+    if source.primary_basis or host.endswith(".edu") or host in {"arxiv.org", "pubmed.ncbi.nlm.nih.gov", "pmc.ncbi.nlm.nih.gov"} or "doi.org" == host:
         return "academic"
     if host.startswith("docs.") or any(part in path for part in ("/docs/", "/documentation/", "/reference/")):
         return "documentation"
@@ -70,11 +70,16 @@ def score_source(source: Source, question: str, mode: ModeConfig, *, today: date
     published = publication_date(source.publication_date)
     age = ((today or date.today()) - published).days if published else None
     freshness = max(0.0, 1 - age / 1825) if age is not None and age >= 0 else 0.0
-    evidence_strength = min(len(source.content.strip()) / 2000, 1.0)
+    text = source.content.lower()
+    signals = [bool(re.search(r"\b(methods?|methodology|sample|participants|dataset)\b", text)),
+               bool(re.search(r"\b(limitations?|uncertainty|confidence interval)\b", text)),
+               bool(re.search(r"\b(results?|measurements?|observations?)\b", text)),
+               source.retrieval_method == "fetch"]
+    evidence_strength = sum(signals) / len(signals)
     scores = dict(relevance=round(relevance, 4), authority=authority, freshness=round(freshness, 4),
         source_type=1.0 if source.source_type in mode.preferred_types else .3,
         evidence_strength=round(evidence_strength, 4))
-    notes = ["Heuristic estimates: lexical relevance, domain/type authority proxy, five-year freshness decay, mode type preference, and text length as an evidence proxy.", "Source type inferred from URL/title metadata; not independently verified."]
+    notes = ["Heuristic estimates: lexical relevance, domain/type authority proxy, five-year freshness decay, mode preference, and reporting signals (methods, limitations, results, original text). Signals do not establish study validity.", "Source type inferred from URL/title metadata; not independently verified."]
     if age is None or age < 0:
         notes.append("Publication date missing, invalid or in the future; freshness scored zero.")
     return SourceQuality(**scores, total=round(sum(scores[key] * weight for key, weight in mode.weights.model_dump().items()), 4), notes=notes)

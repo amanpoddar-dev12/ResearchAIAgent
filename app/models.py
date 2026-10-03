@@ -2,7 +2,7 @@
 
 from datetime import date
 from typing import Any, Literal
-from pydantic import BaseModel, Field, ConfigDict, computed_field, field_validator, model_validator
+from pydantic import BaseModel, Field, ConfigDict, PrivateAttr, computed_field, field_validator, model_validator
 from app.modes import ModeName, SourceType
 
 
@@ -61,6 +61,18 @@ class Evidence(BaseModel):
     @property
     def quote(self) -> str:
         return self.excerpt
+
+
+class EvidenceAssessment(BaseModel):
+    claim_id: str
+    evidence_id: str
+    relation: Literal["supports", "contradicts", "context"]
+    strength: Literal["direct", "partial"] = "partial"
+    reasoning: str = ""
+
+
+class EvidenceAssessmentBatch(BaseModel):
+    assessments: list[EvidenceAssessment] = Field(default_factory=list)
 
 
 class CitationRejection(BaseModel):
@@ -140,6 +152,10 @@ class Source(BaseModel):
     domain: str
     content: str
     summary: str = ""
+    discovery_snippet: str = ""
+    original_url: str | None = None
+    primary_basis: str | None = None
+    reference_urls: list[str] = Field(default_factory=list)
     publication_date: str | None = None
     source_type: str | None = None
     search_query: str | None = None
@@ -194,6 +210,7 @@ class Finding(BaseModel):
     depends_on: list[str] = Field(default_factory=list)
     sub_question_ids: list[str] = Field(default_factory=list)
     dependency_rejected: bool = False
+    evidence_assessments: list[EvidenceAssessment] = Field(default_factory=list)
 
 
 class Verification(BaseModel):
@@ -210,6 +227,8 @@ class Verification(BaseModel):
 class ClaimExtraction(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     evidence: list[Evidence] = Field(default_factory=list)
+    data_points: list["DataPoint"] = Field(default_factory=list)
+    processed_source_ids: list[str] = Field(default_factory=list)
 
 
 class DataPoint(BaseModel):
@@ -255,6 +274,26 @@ class ReportSection(BaseModel):
     id: str
     title: str
     content: str = ""
+
+
+class ReportBlock(BaseModel):
+    id: str
+    section_id: str
+    kind: Literal["observation", "comparison", "interpretation"] = "observation"
+    text: str
+    claim_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    limitations: str = ""
+
+
+class ReportBlockReview(BaseModel):
+    block_id: str
+    supported: bool = False
+    reason: str = ""
+
+
+class ReportBlockReviews(BaseModel):
+    reviews: list[ReportBlockReview] = Field(default_factory=list)
 
 
 class ChartSeries(BaseModel):
@@ -346,6 +385,13 @@ class ResearchState(BaseModel):
     retrieved_urls: list[str] = Field(default_factory=list)
     provenance_required: bool = False  # Legacy deserialized sessions predate retrieval provenance.
     explicit_sub_question_links: bool = False
+    semantic_validation_required: bool = False
+    searched_queries: list[str] = Field(default_factory=list)
+    extraction_completed: list[str] = Field(default_factory=list)
+    report_blocks: list[ReportBlock] = Field(default_factory=list)
+    llm_usage: dict[str, Any] = Field(default_factory=dict)
+    relevance_threshold: float = .3
+    completion_quality: Literal["complete", "partial"] = "partial"
 
     @computed_field
     @property
@@ -357,6 +403,14 @@ class ResearchState(BaseModel):
 class GapAssessment(BaseModel):
     gaps: list[str] = Field(default_factory=list)
     follow_up_queries: list[str] = Field(default_factory=list)
+    targeted_queries: list["GapQuery"] = Field(default_factory=list)
+
+
+class GapQuery(BaseModel):
+    query: str
+    sub_question_ids: list[str] = Field(default_factory=list)
+    reason: str
+    priority: Literal["high", "medium", "low"] = "medium"
 
 
 class QuestionAnalysis(BaseModel):
@@ -415,6 +469,7 @@ class ConflictAssessment(BaseModel):
 
 
 class ReportDraft(BaseModel):
+    _approved_blocks: set[str] = PrivateAttr(default_factory=set)
     title: str
     executive_summary: str
     key_findings: list[str] = Field(default_factory=list)
@@ -433,3 +488,4 @@ class ReportDraft(BaseModel):
     sections: list[ReportSection] = Field(default_factory=list)
     charts: list[ChartSpec] = Field(default_factory=list)
     tables: list[TableSpec] = Field(default_factory=list)
+    blocks: list[ReportBlock] = Field(default_factory=list)

@@ -28,7 +28,7 @@ def decide_stop(*, coverage: float, unresolved: list[str], gains: list[int], sea
             break
     if not stop and coverage >= .9 and not unresolved:
         stop, reason = True, "Evidence coverage reached"
-    if not stop and len(gains) > plateau_window and all(gain == 0 for gain in gains[-plateau_window:]):
+    if not stop and len(gains) >= plateau_window and all(gain == 0 for gain in gains[-plateau_window:]):
         stop, reason = True, "New-evidence gain plateau"
     return StopDecision(stop=stop, reason=reason, coverage=round(coverage, 4), unresolved=list(unresolved))
 
@@ -47,17 +47,22 @@ def coverage_gaps(state):
     gaps = []
     sources = {source.id: source for source in state.sources}
     for claim in state.findings:
-        if claim.evidence_status in {"Supported", "Contradicted"}:
+        domains = {sources[sid].domain for sid in claim.source_ids if sid in sources}
+        independent = len(domains) >= (2 if state.semantic_validation_required and state.mode != "quick" else 1)
+        if claim.evidence_status in {"Supported", "Contradicted"} and independent:
             covered.update(claim.sub_question_ids)
         if claim.evidence_status in {"Unverified", "Partially Supported"}:
             gaps.append((claim.claim + " evidence corroboration contradiction", f"{claim.id}: {claim.evidence_status}", claim.sub_question_ids))
+        elif not independent:
+            gaps.append((claim.claim + " independent replication evidence", f"{claim.id}: lacks independent corroboration", claim.sub_question_ids))
         elif not any(sources[sid].source_type in {"primary", "academic", "documentation"} for sid in claim.source_ids if sid in sources):
             gaps.append((claim.claim + " original primary source", f"{claim.id}: lacks a primary source", claim.sub_question_ids))
     tasks = state.plan.sub_question_tasks if state.plan else []
     question_gaps = []
     for task in tasks:
         if task.id not in covered:
-            query = task.query + (" primary source evidence" if task.id in state.searched_sub_questions else "")
+            variants = [task.query, task.query + " primary source evidence", task.query + " original study methods limitations", task.query + " conflicting evidence replication", task.query + " official dataset measurements"]
+            query = next((query for query in variants if query.casefold() not in state.searched_queries), variants[-1])
             question_gaps.append((query, f"{task.id}: sub-question has no verified evidence", [task.id]))
     coverage = len(covered.intersection(task.id for task in tasks)) / len(tasks) if tasks else 0
     if not tasks and not state.findings:

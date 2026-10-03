@@ -20,7 +20,7 @@ import { ResearchInsights } from "../components/ResearchInsights";
 import { ClaimExplorer } from "../components/ClaimExplorer";
 import { ResearchGaps } from "../components/ResearchGaps";
 import { ResearchChat } from "../components/ResearchChat";
-import { startResearch, streamResearch } from "../services/api";
+import { startResearch, streamResearch, cancelResearch } from "../services/api";
 import { emptyFilters } from "../types/research";
 import type { ResearchEvent, ResearchSource, ResearchStatus, ResearchMode, SourceFilters, ResearchBudgets } from "../types/research";
 import { initialResearchSession, researchReducer } from "../state/researchStore";
@@ -78,6 +78,8 @@ export function ResearchPage() {
 
   const clearResults = () => {
     generation.current++;
+    const activeId = session.events.find((event) => event.research_id)?.research_id;
+    if (status === "researching" && activeId) void cancelResearch(activeId).catch(() => {});
     cleanup.current?.();
     cleanup.current = null;
     dispatch({ type: "reset" });
@@ -110,7 +112,7 @@ export function ResearchPage() {
     try {
       const id = await startResearch({ question: question.trim(), depth: mode === "quick" ? "quick" : "deep", mode, max_sources: maxSources, filters, budgets,
         target_claims: mode === "fact_check" ? items : [], comparison_items: mode === "compare" ? items : [] });
-      if (generation.current !== current) return;
+      if (generation.current !== current) { void cancelResearch(id).catch(() => {}); return; }
       cleanup.current = streamResearch(id, (event: ResearchEvent) => {
         if (generation.current === current) dispatch(event);
       }, (error) => {
@@ -136,9 +138,11 @@ export function ResearchPage() {
             <div className="min-w-0 space-y-6 no-print">
               <ResearchProgress events={session.events} status={status} hasReport={Boolean(session.report)} mode={mode} sources={session.sources} />
               <ResearchTimeline events={session.events} status={status} />
+              {status === "researching" && researchId && <button className="button-secondary" onClick={() => void cancelResearch(researchId).catch((error: Error) => dispatch({ type: "error", message: error.message }))}>Cancel research</button>}
+              {status === "completed" && snapshot?.completion_quality === "partial" && <p className="text-sm text-amber-700 dark:text-amber-300" role="status">Report ready with unresolved evidence gaps. Review the limitations before using its conclusions.</p>}
               {snapshot && <div className="metric-grid">
                 <MetricCard label="Sources found" value={session.sources.length} description="Number of sources discovered in this session." />
-                <MetricCard label="Relevant sources" value={relevantSources(session.sources).value ?? "Not available"} description={relevantSources(session.sources).formula} />
+                <MetricCard label="Relevant sources" value={relevantSources(session.sources, snapshot.relevance_threshold ?? 0.3).value ?? "Not available"} description={relevantSources(session.sources, snapshot.relevance_threshold ?? 0.3).formula} />
                 <MetricCard label="High-quality sources" value={highQualitySources(session.sources).value ?? "Not available"} description={highQualitySources(session.sources).formula} />
                 <MetricCard label="Claims" value={session.findings.length} description="Number of findings reported by the research state." />
                 <MetricCard label="Verified claims" value={verifiedClaims(snapshot).value ?? "Not available"} description={verifiedClaims(snapshot).formula} />
@@ -158,7 +162,7 @@ export function ResearchPage() {
               {snapshot && <ResearchQuality state={snapshot} />}
               {session.gaps.length > 0 && <ResearchGaps gaps={session.gaps} />}
             </div>
-            <aside className="min-w-0 space-y-6 no-print"><SourceList sources={session.sources} onPreview={setPreview} />{snapshot?.audit_log && <AuditView entries={snapshot.audit_log} />}<ActivityLog events={session.events} /></aside>
+            <aside className="min-w-0 space-y-6 no-print"><SourceList sources={session.sources} conflicts={session.conflicts} onPreview={setPreview} />{snapshot?.audit_log && <AuditView entries={snapshot.audit_log} />}<ActivityLog events={session.events} /></aside>
             {session.report && <div className="report-full-width"><ResearchReport markdown={session.report} structured={snapshot?.structured_report} sources={session.sources} onPreview={setPreview} /></div>}
             <div className="report-support-panels report-full-width no-print">
               {snapshot && <details className="report-support-panel"><summary>Research insights</summary><ResearchInsights state={snapshot} findings={session.findings} /></details>}

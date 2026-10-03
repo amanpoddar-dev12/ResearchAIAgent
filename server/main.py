@@ -2,13 +2,13 @@ import os
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from .api.models import ResearchRequest, ResearchStarted
 from app.chat import ChatRequest, ChatResponse
-from .api.research import chat_research, get_public_state, jobs, start_research, stream_research
+from .api.research import chat_research, get_public_state, jobs, start_research, stream_research, get_job_status, cancel_research, cleanup_jobs
 
 
 @asynccontextmanager
@@ -52,14 +52,36 @@ async def health() -> dict[str, str]:
 
 @app.post("/api/research", response_model=ResearchStarted)
 async def create_research(request: ResearchRequest) -> ResearchStarted:
-    return ResearchStarted(research_id=await start_research(request))
+    try:
+        return ResearchStarted(research_id=await start_research(request))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
 
 
 @app.get("/api/research/{research_id}/stream")
-async def research_stream(research_id: str) -> StreamingResponse:
+async def research_stream(research_id: str, request: Request, after: int = Query(default=0, ge=0)) -> StreamingResponse:
     if research_id not in jobs:
         raise HTTPException(status_code=404, detail="Research session not found")
-    return StreamingResponse(stream_research(research_id), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive"})
+    try:
+        cursor = max(after, int(request.headers.get("Last-Event-ID", "0")))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid event cursor") from None
+    return StreamingResponse(stream_research(research_id, cursor, wire_ids=True), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/research/{research_id}/status")
+async def research_status(research_id: str):
+    status = get_job_status(research_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="Research session expired or not found")
+    return status
+
+
+@app.post("/api/research/{research_id}/cancel")
+async def research_cancel(research_id: str):
+    if not cancel_research(research_id):
+        raise HTTPException(status_code=404, detail="Research session not found")
+    return {"status": "cancelling"}
 
 
 @app.get("/api/research/{research_id}")

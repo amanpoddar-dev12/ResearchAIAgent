@@ -13,7 +13,7 @@ async function component(name) {
   let { outputText } = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.ReactJSX },
   });
-  for (const dependency of ["react", "react/jsx-runtime"]) {
+  for (const dependency of ["react", "react/jsx-runtime", "lucide-react"]) {
     outputText = outputText.replaceAll(`from "${dependency}"`, `from "${pathToFileURL(require.resolve(dependency)).href}"`);
   }
   return (await import("data:text/javascript;base64," + Buffer.from(outputText).toString("base64")))[name];

@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from app.config import Settings
 from app.llm import (
-    LLMRouter, ProviderAuthError, ProviderResponseError, ProviderTimeoutError,
+    LLMRequestBudgetExceeded, LLMRouter, ProviderAuthError, ProviderResponseError, ProviderTimeoutError,
 )
 from app.llm.routing import FINAL_REVIEW, PLANNING
 from app.llm.providers import GroqProvider, MistralProvider
@@ -85,6 +85,7 @@ def test_retry_then_success(monkeypatch):
     monkeypatch.setattr("app.llm.providers.asyncio.sleep", no_wait)
     result = asyncio.run(router.complete([{"role": "user", "content": "x"}], task=PLANNING, response_model=Result))
     assert result.value == "ok"
+    assert router.requests_used == 2
 
 
 def test_429_honors_retry_after(monkeypatch):
@@ -120,10 +121,49 @@ def test_auth_error_is_not_retried(monkeypatch):
 def test_invalid_json_is_repaired_once(monkeypatch):
     responses = iter([Response(payload=chat_payload("not json")), Response(payload=chat_payload('{"value":"fixed"}'))])
     monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: next(responses))
-    result = asyncio.run(LLMRouter(settings()).complete(
+    router = LLMRouter(settings())
+    result = asyncio.run(router.complete(
         [{"role": "user", "content": "x"}], task=PLANNING, response_model=Result,
     ))
     assert result.value == "fixed"
+    assert router.requests_used == 2
+
+
+def test_concurrent_requests_cannot_overspend_budget(monkeypatch):
+    router = LLMRouter(settings(max_llm_requests=1))
+
+    async def complete(*args, **kwargs):
+        await asyncio.sleep(0)
+        return '{"value":"ok"}'
+
+    for provider in router.providers.values():
+        monkeypatch.setattr(provider, "complete", complete)
+
+    async def run():
+        results = await asyncio.gather(
+            router.complete([{"role": "user", "content": "x"}], task=PLANNING, response_model=Result),
+            router.complete([{"role": "user", "content": "y"}], task=PLANNING, response_model=Result),
+            return_exceptions=True,
+        )
+        return results
+
+    results = asyncio.run(run())
+    assert sum(isinstance(result, Result) for result in results) == 1
+    assert router.requests_used == 1
+
+
+def test_repair_requires_a_remaining_request_budget(monkeypatch):
+    router = LLMRouter(settings(max_llm_requests=1))
+    async def malformed(*args, **kwargs):
+        return "not json"
+
+    monkeypatch.setattr(router.providers["gemini"], "complete", malformed)
+    with pytest.raises(LLMRequestBudgetExceeded) as error:
+        asyncio.run(router.complete(
+            [{"role": "user", "content": "x"}], task=PLANNING, response_model=Result,
+        ))
+    assert "request budget" in str(error.value).lower()
+    assert router.requests_used == 1
 
 
 def test_repair_failure_raises_provider_response_error(monkeypatch):

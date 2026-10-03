@@ -65,6 +65,50 @@ const syntheticResult = { status: "complete", final_report: "# SYNTHETIC TEST RE
 const sendEvent = (stream, type, data) => stream.onmessage({ data: JSON.stringify({ type, data, message: "Synthetic test event", timestamp: "2026-01-01T00:00:00Z" }) });
 const nextTurn = () => new Promise((resolve) => setImmediate(resolve));
 
+test("running sessions reconnect from their cursor without starting another job", async (context) => {
+  const requests = [], streams = [], events = [], errors = [];
+  context.mock.method(globalThis, "fetch", async (url, init) => {
+    requests.push({ url, method: init?.method || "GET" });
+    return url.endsWith("/status")
+      ? { ok: true, json: async () => ({ status: "running" }) }
+      : { ok: false, status: 404 };
+  });
+  const original = Object.getOwnPropertyDescriptor(globalThis, "EventSource");
+  globalThis.EventSource = class {
+    constructor(url) { this.url = url; this.closed = false; streams.push(this); }
+    close() { this.closed = true; }
+  };
+  context.after(() => {
+    if (original) Object.defineProperty(globalThis, "EventSource", original);
+    else delete globalThis.EventSource;
+  });
+  const api = await loadApi({ DEV: true });
+  const stop = api.streamResearch("synthetic-running", (event) => events.push(event), (error) => errors.push(error));
+  context.after(stop);
+  streams[0].onmessage({ data: JSON.stringify({ type: "research_snapshot", sequence: 17, data: {} }) });
+  streams[0].onerror();
+  await new Promise((resolve) => setTimeout(resolve, 1100));
+  assert.equal(streams.length, 2);
+  assert.equal(streams[1].url, "/api/research/synthetic-running/stream?after=17");
+  assert.equal(streams[0].closed, true);
+  assert.ok(requests.every((request) => request.method === "GET"));
+  assert.deepEqual(errors, []);
+  sendEvent(streams[1], "complete", { state: syntheticResult, report: syntheticResult.final_report });
+  assert.equal(streams[1].closed, true);
+  assert.deepEqual(events.map((event) => event.type), ["research_snapshot", "complete"]);
+});
+
+test("cancel targets only the existing session", async (context) => {
+  const requests = [];
+  context.mock.method(globalThis, "fetch", async (url, init) => {
+    requests.push({ url, method: init.method });
+    return { ok: true };
+  });
+  const api = await loadApi({ DEV: true });
+  await api.cancelResearch("synthetic-session");
+  assert.deepEqual(requests, [{ url: "/api/research/synthetic-session/cancel", method: "POST" }]);
+});
+
 test("recovers the completed report when the legacy stream omits complete", async (context) => {
   const requests = [];
   const getStream = streamHarness(context, async (url, init) => {
@@ -113,7 +157,7 @@ test("normal terminal events do not trigger recovery or subsequent errors", asyn
 
 test("recovery waits briefly for the final result to be stored", async (context) => {
   let attempts = 0;
-  const getStream = streamHarness(context, async () => ++attempts === 1 ? { ok: false, status: 404 } : { ok: true, json: async () => syntheticResult });
+  const getStream = streamHarness(context, async (url) => url.endsWith("/status") ? { ok: false, status: 404 } : ++attempts === 1 ? { ok: false, status: 404 } : { ok: true, json: async () => syntheticResult });
   const api = await loadApi({ DEV: true });
   const completed = new Promise((resolve, reject) => {
     api.streamResearch("synthetic-session", (event) => { if (event.type === "complete") resolve(event); }, reject);
@@ -125,7 +169,7 @@ test("recovery waits briefly for the final result to be stored", async (context)
 
 test("a real interruption without a completed result still reports failure", async (context) => {
   let attempts = 0;
-  const getStream = streamHarness(context, async () => { attempts++; return { ok: false, status: 404 }; });
+  const getStream = streamHarness(context, async (url) => { if (!url.endsWith("/status")) attempts++; return { ok: false, status: 404 }; });
   const api = await loadApi({ DEV: true });
   const failed = new Promise((resolve) => api.streamResearch("synthetic-session", () => assert.fail("No completed report exists"), resolve));
   getStream().onerror();

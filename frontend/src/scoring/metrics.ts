@@ -10,14 +10,14 @@ function countMetric(value: number, factors: MetricFactor[], formula: string): D
   return { value, factors, formula };
 }
 
-export function relevantSources(sources: ResearchSource[]): DerivedMetric {
+export function relevantSources(sources: ResearchSource[], threshold = RELEVANCE_THRESHOLD): DerivedMetric {
   const scored = sources.filter((source) => source.quality?.relevance !== undefined);
   if (!scored.length) return { value: null, factors: [], formula: "Not available: source relevance scores are missing." };
-  const value = scored.filter((source) => source.quality!.relevance >= RELEVANCE_THRESHOLD).length;
+  const value = scored.filter((source) => source.quality!.relevance >= threshold).length;
   return countMetric(value, [
     { label: "Scored sources", value: String(scored.length) },
-    { label: "Threshold", value: `relevance ≥ ${RELEVANCE_THRESHOLD}` },
-  ], "Count sources with a reported relevance score at or above 0.5.");
+    { label: "Threshold", value: `relevance ≥ ${threshold}` },
+  ], `Count sources with a reported relevance score at or above ${threshold}.`);
 }
 
 export function highQualitySources(sources: ResearchSource[]): DerivedMetric {
