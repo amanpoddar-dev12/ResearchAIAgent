@@ -1,4 +1,4 @@
-"""HTTP adapters for Gemini, Groq, and Mistral chat APIs."""
+"""HTTP adapters for Gemini and Groq chat APIs."""
 
 import asyncio
 import json
@@ -147,6 +147,8 @@ class GeminiProvider(HTTPProvider):
 class OpenAICompatibleProvider(HTTPProvider):
     def _request(self, messages, temperature, max_tokens):
         payload: dict[str, Any] = {"model": self.model, "messages": messages, "temperature": temperature}
+        if self.provider == "groq" and self.model.startswith("qwen/"):
+            payload["reasoning_format"] = "hidden"
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
         return self._post_json({"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}, payload)
@@ -155,8 +157,3 @@ class OpenAICompatibleProvider(HTTPProvider):
 class GroqProvider(OpenAICompatibleProvider):
     provider = "groq"
     endpoint = "https://api.groq.com/openai/v1/chat/completions"
-
-
-class MistralProvider(OpenAICompatibleProvider):
-    provider = "mistral"
-    endpoint = "https://api.mistral.ai/v1/chat/completions"

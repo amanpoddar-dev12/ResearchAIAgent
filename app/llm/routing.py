@@ -31,11 +31,13 @@ TASK_PROVIDER: Final[dict[str, str]] = {
     GAP_ANALYSIS: "gemini",
     SOURCE_QUALITY: "groq",
     CONFLICT_ANALYSIS: "gemini",
-    FACT_VERIFICATION: "mistral",
+    FACT_VERIFICATION: "groq",
     EVIDENCE_EVALUATION: "gemini",
-    INDEPENDENT_REVIEW: "mistral",
+    INDEPENDENT_REVIEW: "groq",
     FINAL_VERIFICATION: "gemini",
     FINAL_SYNTHESIS: "gemini",
-    FINAL_REVIEW: "mistral",
+    FINAL_REVIEW: "groq",
     CHAT_RESPONSE: "gemini",
 }
+
+REVIEW_TASKS: Final = frozenset({FACT_VERIFICATION, INDEPENDENT_REVIEW, FINAL_REVIEW})

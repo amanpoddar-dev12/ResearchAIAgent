@@ -1,4 +1,5 @@
 import type { ChatResponse, ResearchEvent, ResearchRequest, ResearchState } from "../types/research";
+import type { HistoryMessage, RetrievalSelection, SessionDocument } from "../rag/retrieval";
 
 // Local fetch and SSE requests must use Vite's /api proxy, even when a production URL is configured.
 const API_URL = (import.meta.env.DEV ? "" : import.meta.env.VITE_API_URL || import.meta.env.VITE_BACKEND_URL || "").replace(/\/$/, "");
@@ -35,6 +36,50 @@ export async function askResearch(id: string, message: string, context: { claim_
     throw new Error(detail || "The research assistant is temporarily unavailable.");
   }
   return await response.json() as ChatResponse;
+}
+
+export async function getChatDocuments(id: string, signal?: AbortSignal): Promise<SessionDocument[]> {
+  const response = await apiRequest(`${API_URL}/api/research/${id}/chat/index`, { signal });
+  if (!response.ok) throw new Error("The active research session is unavailable. Its index could not be loaded.");
+  const payload = await response.json() as { research_id: string; documents: SessionDocument[] };
+  if (payload.research_id !== id) throw new Error("Research session mismatch.");
+  return payload.documents;
+}
+
+export async function streamResearchChat(id: string, message: string, retrieval: RetrievalSelection, history: HistoryMessage[],
+  onEvent: (event: ResearchEvent) => void, signal: AbortSignal): Promise<void> {
+  const response = await apiRequest(`${API_URL}/api/research/${id}/chat/stream`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, retrieval, history: history.slice(-20) }), signal,
+  });
+  if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail || "The research assistant is unavailable.");
+  if (!response.body) throw new Error("The answer stream is unavailable.");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let completed = false;
+  try {
+    while (!completed) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      const frames = buffer.split(/\r?\n\r?\n/);
+      buffer = frames.pop() || "";
+      for (const frame of frames) {
+        const data = frame.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trimStart()).join("\n");
+        if (!data) continue;
+        const event = JSON.parse(data) as ResearchEvent;
+        if (event.research_id !== id) throw new Error("Answer stream session mismatch.");
+        if (event.type === "chat_error") throw new Error(event.message);
+        onEvent(event);
+        if (event.type === "chat_complete") completed = true;
+      }
+      if (done) break;
+    }
+    if (!completed && !signal.aborted) throw new Error("The answer stream ended before completion. Please retry.");
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
 }
 
 export function streamResearch(id: string, onEvent: (event: ResearchEvent) => void, onError: (error: Error) => void): () => void {

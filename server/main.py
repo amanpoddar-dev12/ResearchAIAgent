@@ -8,7 +8,8 @@ from fastapi.responses import StreamingResponse
 
 from .api.models import ResearchRequest, ResearchStarted
 from app.chat import ChatRequest, ChatResponse
-from .api.research import chat_research, get_public_state, jobs, start_research, stream_research, get_job_status, cancel_research, cleanup_jobs
+from app.assistant_context import AssistantRequest
+from .api.research import chat_research, get_public_state, jobs, start_research, stream_research, get_job_status, cancel_research, cleanup_jobs, get_chat_documents, stream_chat, assistant_job
 
 
 @asynccontextmanager
@@ -93,11 +94,33 @@ async def research_result(research_id: str) -> dict:
 
 
 @app.post("/api/research/{research_id}/chat", response_model=ChatResponse)
-async def research_chat(research_id: str, request: ChatRequest) -> ChatResponse:
+async def research_chat(research_id: str, request: AssistantRequest) -> ChatResponse:
     try:
         return await chat_research(research_id, request)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception:
         logging.getLogger(__name__).exception("Research chat failed for %s", research_id)
         raise HTTPException(status_code=503, detail="The research assistant is temporarily unavailable.") from None
+
+
+@app.get("/api/research/{research_id}/chat/index")
+async def research_chat_index(research_id: str):
+    try:
+        return get_chat_documents(research_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/research/{research_id}/chat/stream")
+async def research_chat_stream(research_id: str, request: AssistantRequest) -> StreamingResponse:
+    try:
+        assistant_job(research_id, request)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return StreamingResponse(stream_chat(research_id, request), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

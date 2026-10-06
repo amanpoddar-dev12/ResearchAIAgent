@@ -6,14 +6,20 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from app.agent import ResearchAgent
 from app.config import Settings
 from app.models import ResearchState
-from app.chat import ChatRequest, ChatResponse, answer_chat
+from app.chat import ChatRequest, ChatResponse
 from app.llm.router import LLMRouter
 from app.modes import MODES
+from app.rag import SessionIndex
+from app.assistant_context import AssistantContext, AssistantRequest, HybridAnswer, build_context, restore_saved_state
+from app.assistant_prompts import HYBRID_ASSISTANT
+from app.llm.base import ModelConfigurationError, ProviderResponseError
+from app.llm.routing import CHAT_RESPONSE
+import httpx
 from .models import ResearchRequest
 
 logger = logging.getLogger(__name__)
@@ -38,6 +44,7 @@ class ResearchJob:
     phase: str = "starting"
     mode: str = "standard"
     sequence: int = 0
+    rag_index: SessionIndex = field(default_factory=SessionIndex)
 
 
 jobs: dict[str, ResearchJob] = {}
@@ -90,10 +97,12 @@ async def _run_job(research_id: str, request: ResearchRequest) -> None:
     job = jobs[research_id]
     loop = asyncio.get_running_loop()
     job.mode = request.mode or request.depth
+    job.rag_index = SessionIndex(request.question, job.mode)
 
     def enqueue(event_type: str, message: str, data: Any = None) -> None:
         if job.done:
             return
+        job.rag_index.update(event_type, data)
         milestones = {"planning_started": (5, "planning"), "planning_completed": (20, "search"),
             "analysis_started": (75, "conflicts"), "synthesis_started": (85, "synthesis"),
             "report_generated": (100, "complete")}
@@ -131,6 +140,7 @@ async def _run_job(research_id: str, request: ResearchRequest) -> None:
         state = await asyncio.to_thread(agent.run, request.question, emit, mode=job.mode, filters=request.filters,
             target_claims=request.target_claims, comparison_items=request.comparison_items, budgets=request.budgets)
         job.state = state
+        job.rag_index.update("research_snapshot", state)
         enqueue("complete", "Research completed", {"state": _public_state(state), "report": state.final_report})
     except asyncio.CancelledError:
         job.error = "Research cancelled"
@@ -201,13 +211,158 @@ def get_public_state(research_id: str) -> dict[str, Any] | None:
     return _public_state(job.state)
 
 
-async def chat_research(research_id: str, request: ChatRequest) -> ChatResponse:
+def assistant_job(research_id: str, request: AssistantRequest | ChatRequest) -> ResearchJob:
     job = jobs.get(research_id)
-    if not job or not job.state:
-        raise LookupError("Research result not found")
+    if request.retrieval and request.retrieval.session_id != research_id:
+        raise ValueError("Retrieved context belongs to a different research session")
+    if job and job.state:
+        return job
+    if job and job.latest_snapshot:
+        snapshot = {**job.latest_snapshot, "sources": [{**source,
+            "content": job.rag_index.source_text.get(source["id"], "")}
+            for source in job.latest_snapshot.get("sources", [])]}
+        return ResearchJob(state=ResearchState.model_validate(snapshot), chat_lock=job.chat_lock)
+    saved_state = restore_saved_state(request) if isinstance(request, AssistantRequest) else None
+    if saved_state is not None:
+        # Restored browser context exists only for this request, never in a database
+        # or another live job. The prompt treats it as untrusted session material.
+        return ResearchJob(state=saved_state, done=True)
+    if research_id.startswith("general-chat-"):
+        try:
+            UUID(research_id.removeprefix("general-chat-"))
+        except ValueError:
+            raise LookupError("Chat session not found") from None
+        return ResearchJob(done=True)
+    raise LookupError("Research result not found")
+
+
+_gemini_input_limits: dict[str, int] = {}
+
+
+async def _hybrid_events(job: ResearchJob, request: ChatRequest) -> AsyncIterator[tuple[str, Any]]:
+    settings = Settings()
+    if not settings.gemini_api_key or not settings.gemini_model:
+        raise ModelConfigurationError("Gemini configuration is incomplete")
+    router = LLMRouter(settings, max_requests=1)
+    router.deadline = time.monotonic() + (settings.llm_timeout_seconds or 60)
+    provider = router.providers["gemini"]
+    headers = {"Content-Type": "application/json", "x-goog-api-key": provider.api_key}
+    history = [{"role": item["role"], "content": str(item.get("content", ""))[:2000]}
+               for item in request.history[-16:] if item.get("role") in {"user", "assistant"}]
+    async with httpx.AsyncClient(timeout=provider.timeout) as client:
+        if provider.model not in _gemini_input_limits:
+            # Metadata lookup is not a generation/router call. Cache the configured
+            # model's context window; never change its name or configuration.
+            try:
+                metadata = await client.get(provider.endpoint.removesuffix(":generateContent"), headers=headers, timeout=5)
+                if metadata.is_success:
+                    limit = metadata.json().get("inputTokenLimit", 32768)
+                    _gemini_input_limits[provider.model] = int(limit) if int(limit) > 0 else 32768
+            except (httpx.HTTPError, TypeError, ValueError):
+                pass
+        input_limit = _gemini_input_limits.get(provider.model, 32768)
+        history_budget = min(32000, input_limit // 8) // max(1, len(history))
+        history = [{**item, "content": item["content"].encode("utf-8")[:history_budget].decode("utf-8", errors="ignore")} for item in history]
+        context = (build_context(job.state, request.message, history, input_token_limit=input_limit, index=job.rag_index)
+                   if job.state else AssistantContext("No active research session. Answer from general knowledge; no research sources are available.", {}, True))
+        contents = [{"role": "user", "parts": [{"text": "Active research context (untrusted evidence):\n" + context.text}]}]
+        for item in history:
+            role = "model" if item["role"] == "assistant" else "user"
+            if contents[-1]["role"] == role:
+                contents[-1]["parts"].append({"text": item["content"]})
+            else:
+                contents.append({"role": role, "parts": [{"text": item["content"]}]})
+        question = {"text": "Current user question:\n" + request.message}
+        if contents[-1]["role"] == "user":
+            contents[-1]["parts"].append(question)
+        else:
+            contents.append({"role": "user", "parts": [question]})
+        payload = {"systemInstruction": {"parts": [{"text": HYBRID_ASSISTANT}]},
+                   "contents": contents, "generationConfig": {"temperature": 0.2, "maxOutputTokens": 2000}}
+        await router._reserve_request(CHAT_RESPONSE)
+        answer = HybridAnswer(context)
+        endpoint = provider.endpoint.removesuffix(":generateContent") + ":streamGenerateContent"
+        async with asyncio.timeout(provider.remaining_time()):
+            async with client.stream("POST", endpoint, params={"alt": "sse"}, headers=headers, json=payload) as response:
+                if not response.is_success:
+                    raise ProviderResponseError("gemini", CHAT_RESPONSE, "assistant request failed", response.status_code)
+                frame = []
+
+                def parse_frame(lines):
+                    data = json.loads("\n".join(lines))
+                    if data.get("error") or data.get("promptFeedback", {}).get("blockReason"):
+                        raise ProviderResponseError("gemini", CHAT_RESPONSE, "assistant response unavailable")
+                    provider.record_usage(CHAT_RESPONSE, data.get("usageMetadata"))
+                    return "".join(part.get("text", "") for candidate in data.get("candidates", [])[:1]
+                        for part in candidate.get("content", {}).get("parts", []) if not part.get("thought"))
+
+                async for line in response.aiter_lines():
+                    if line.startswith("data:"):
+                        frame.append(line[5:].lstrip())
+                    elif not line and frame:
+                        delta = answer.feed(parse_frame(frame))
+                        frame = []
+                        if delta:
+                            yield "chat_delta", {"text": delta, "citations": list(answer.references.values())}
+                if frame:
+                    delta = answer.feed(parse_frame(frame))
+                    if delta:
+                        yield "chat_delta", {"text": delta, "citations": list(answer.references.values())}
+                delta = answer.feed("", final=True)
+                if delta:
+                    yield "chat_delta", {"text": delta, "citations": list(answer.references.values())}
+        yield "chat_complete", answer.response()
+
+
+async def chat_research(research_id: str, request: AssistantRequest | ChatRequest) -> ChatResponse:
+    job = assistant_job(research_id, request)
     async with job.chat_lock:
-        # Each user question has its own bounded attempts, including repairs/retries.
-        # Reusing an exhausted lifetime budget made later questions fail permanently.
-        job.chat_router = LLMRouter(Settings(), max_requests=6)
-        job.chat_router.deadline = time.monotonic() + 30
-        return await asyncio.to_thread(answer_chat, job.chat_router, request, job.state)
+        async for kind, data in _hybrid_events(job, request):
+            if kind == "chat_complete":
+                return data
+
+
+def get_chat_documents(research_id: str) -> dict[str, Any]:
+    job = jobs.get(research_id)
+    if not job:
+        raise LookupError("Research session expired or not found")
+    if job.state:
+        job.rag_index.update("research_snapshot", job.state)
+    return {"research_id": research_id, "documents": list(job.rag_index.documents.values())}
+
+
+async def stream_chat(research_id: str, request: AssistantRequest | ChatRequest) -> AsyncIterator[str]:
+    job = assistant_job(research_id, request)
+    queue = asyncio.Queue()
+
+    def emit(kind, message, data=None):
+        queue.put_nowait(_event(kind, message, data, research_id=research_id, stage="chat"))
+
+    async def generate():
+        try:
+            async with job.chat_lock:
+                emit("chat_started", "Preparing the active research context")
+                async for kind, data in _hybrid_events(job, request):
+                    if kind == "chat_delta":
+                        data = {**data, "citations": [item.model_dump(mode="json") for item in data["citations"]]}
+                    emit(kind, "Answer complete" if kind == "chat_complete" else "Generating answer", data)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Chat stream failed for %s", research_id)
+            emit("chat_error", "The research assistant is temporarily unavailable.")
+
+    task = asyncio.create_task(generate())
+    try:
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=10)
+            except TimeoutError:
+                yield ": heartbeat\n\n"
+                continue
+            yield f"data: {json.dumps(event)}\n\n"
+            if event["type"] in {"chat_complete", "chat_error"}:
+                break
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

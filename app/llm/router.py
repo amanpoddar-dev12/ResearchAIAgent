@@ -14,8 +14,8 @@ from .base import (
     LLMClient, LLMRequestBudgetExceeded, ModelConfigurationError,
     ProviderResponseError,
 )
-from .providers import GeminiProvider, GroqProvider, MistralProvider
-from .routing import TASK_PROVIDER
+from .providers import GeminiProvider, GroqProvider
+from .routing import TASK_PROVIDER, REVIEW_TASKS
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -33,14 +33,14 @@ class LLMRouter(LLMClient):
         self.providers = {
             "gemini": GeminiProvider(settings.gemini_api_key, settings.gemini_model, timeout, retries),
             "groq": GroqProvider(settings.groq_api_key, settings.groq_model, timeout, retries),
-            "mistral": MistralProvider(settings.mistral_api_key, settings.mistral_model, timeout, retries),
         }
+        self.review_provider = GroqProvider(settings.groq_api_key, settings.groq_review_model, timeout, retries)
         self.model_name = settings.gemini_model
         self.deadline: float | None = None
         self.cancelled = threading.Event()
         self.reserved_final_calls = 0
         self.usage: dict[str, dict] = {}
-        for provider in self.providers.values():
+        for provider in [*self.providers.values(), self.review_provider]:
             provider.before_retry = self._reserve_attempt
             provider.remaining_time = self.remaining_time
             provider.record_usage = self._record_usage
@@ -70,7 +70,7 @@ class LLMRouter(LLMClient):
         if self.remaining_time() <= 0:
             raise LLMRequestBudgetExceeded("Session wall-clock budget exhausted")
         provider_name = TASK_PROVIDER[task]
-        provider = self.providers[provider_name]
+        provider = self.review_provider if task in REVIEW_TASKS else self.providers[provider_name]
         if response_model is not None:
             messages = [*messages, {"role": "user", "content": "Return only JSON conforming exactly to this schema:\n" + json.dumps(response_model.model_json_schema())}]
         if max_tokens is None:

@@ -11,7 +11,7 @@ SYNTHETIC_TEXT = "SYNTHETIC TEST DATA: Test widget Alpha has a test speed of 10 
 def synthetic_settings():
     return Settings(_env_file=None, gemini_api_key="synthetic-not-a-key", tavily_api_key="synthetic-not-a-key",
         gemini_model="synthetic-test-model", groq_api_key="synthetic-not-a-key", groq_model="synthetic-groq-model",
-        mistral_api_key="synthetic-not-a-key", mistral_model="synthetic-mistral-model",
+        groq_review_model="synthetic-review-model",
         llm_timeout_seconds=60, llm_max_retries=2,
         max_searches=10, max_iterations=5, max_sources=20, max_llm_requests=10)
 

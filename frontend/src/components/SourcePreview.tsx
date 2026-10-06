@@ -5,7 +5,7 @@ export function SourcePreview({ source, evidence, onClose }: { source: ResearchS
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => { const element = dialog.current; element?.showModal(); return () => element?.close(); }, []);
   const excerpts = evidence.filter((item) => item.source_id === source.id);
-  return <dialog ref={dialog} onCancel={onClose} onClose={onClose} aria-labelledby="source-preview-title" className="source-preview w-[min(94vw,42rem)] max-h-[85vh] overflow-auto rounded-2xl bg-white p-6 text-slate-900 shadow-xl backdrop:bg-slate-950/50 dark:bg-slate-900 dark:text-slate-100">
+  return <dialog ref={dialog} onCancel={onClose} onClose={() => { if (dialog.current && !dialog.current.open) onClose(); }} aria-labelledby="source-preview-title" className="source-preview w-[min(94vw,42rem)] max-h-[85vh] overflow-auto rounded-2xl bg-white p-6 text-slate-900 shadow-xl backdrop:bg-slate-950/50 dark:bg-slate-900 dark:text-slate-100">
     <div className="flex items-start justify-between gap-4"><h2 id="source-preview-title" className="text-xl font-semibold">{source.title}</h2><button autoFocus className="button-secondary" onClick={onClose}>Close</button></div>
     <p className="my-3 text-sm">{source.domain} · {source.publication_date || "Date unknown"} · {source.source_type || "Type unknown"}</p>
     <a href={source.url} target="_blank" rel="noreferrer" className="break-all text-indigo-600 underline">Open original source</a>

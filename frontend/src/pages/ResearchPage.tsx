@@ -29,6 +29,8 @@ import { deleteSavedResearch, clearSavedResearch, listSavedResearch, saveResearc
 import { citationCoverage, evidenceCount, highQualitySources, relevantSources, researchCoverage, verifiedClaims } from "../scoring/metrics";
 
 export function ResearchPage() {
+  const [generalChatId] = useState(() => `general-chat-${crypto.randomUUID()}`);
+  const [activeTab, setActiveTab] = useState<"research" | "assistant">("research");
   const [question, setQuestion] = useState("");
   const [mode, setMode] = useState<ResearchMode>("quick");
   const [maxSources, setMaxSources] = useState(10);
@@ -42,6 +44,7 @@ export function ResearchPage() {
   const [elapsed, setElapsed] = useState(0);
   const [saved, setSaved] = useState<SavedResearch[]>([]);
   const [storageError, setStorageError] = useState("");
+  const [restoredResearchId, setRestoredResearchId] = useState<string | null>(null);
   const cleanup = useRef<(() => void) | null>(null);
   const generation = useRef(0);
   const savedSessionId = useRef<string | null>(null);
@@ -69,12 +72,12 @@ export function ResearchPage() {
   }, []);
   useEffect(() => {
     if (status !== "completed" || !snapshot || !session.report) return;
-    const id = session.events.find((event) => event.research_id)?.research_id || `saved-${Date.now()}`;
+    const id = session.events.find((event) => event.research_id)?.research_id || restoredResearchId || `saved-${Date.now()}`;
     if (savedSessionId.current === id) return;
     savedSessionId.current = id;
     const item = toSavedResearch(id, snapshot.question.question, snapshot.mode || mode, session.report, snapshot);
     saveResearch(item).then(() => listSavedResearch().then(setSaved)).catch(() => setStorageError("This report could not be saved. Browser storage may be full; export the report before leaving."));
-  }, [mode, session.events, session.report, snapshot, status]);
+  }, [mode, restoredResearchId, session.events, session.report, snapshot, status]);
 
   const clearResults = () => {
     generation.current++;
@@ -83,6 +86,8 @@ export function ResearchPage() {
     cleanup.current?.();
     cleanup.current = null;
     dispatch({ type: "reset" });
+    setRestoredResearchId(null);
+    setActiveTab("research");
     setPreview(null);
   };
   const reset = () => {
@@ -90,6 +95,9 @@ export function ResearchPage() {
   };
   const openSaved = (item: SavedResearch) => {
     cleanup.current?.(); cleanup.current = null; generation.current++;
+    savedSessionId.current = item.id;
+    setRestoredResearchId(item.id);
+    setActiveTab("research");
     dispatch({ type: "restore", session: restoreResearch(item) });
     setQuestion(item.question); setMode(item.mode); setStorageError("");
   };
@@ -123,16 +131,17 @@ export function ResearchPage() {
     }
   };
 
-  const researchId = session.events.find((event) => event.research_id)?.research_id;
+  const researchId = session.events.find((event) => event.research_id)?.research_id || restoredResearchId;
   return <div className="app-shell min-h-screen">
-    <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} onNew={reset} saved={saved} onOpenSaved={openSaved} onRenameSaved={renameSaved} onDeleteSaved={removeSaved} onClearSaved={clearSaved} />
+    <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} onNew={reset} saved={saved} onOpenSaved={openSaved} onRenameSaved={renameSaved} onDeleteSaved={removeSaved} onClearSaved={clearSaved} activeView={activeTab} onViewChange={setActiveTab} />
     <div className="lg:pl-64">
       <Header dark={dark} onTheme={() => setDark((old) => !old)} onNew={reset} onMenu={() => setSidebarOpen(true)} status={status} mode={mode} />
       <main id="main-content" className="mx-auto max-w-7xl overflow-x-hidden px-4 py-8 sm:px-6 lg:px-8">
         <div className="mb-8 flex flex-wrap items-end justify-between gap-4 no-print">
-          <div><p className="eyebrow">Research workspace</p><h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">{snapshot?.question.refined_question || question || "Start with a research question"}</h1></div>
+          <div><p className="eyebrow">{activeTab === "assistant" ? "Research Assistant" : "Research workspace"}</p><h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">{activeTab === "assistant" ? "Chat with your assistant" : snapshot?.question.refined_question || question || "Start with a research question"}</h1></div>
           {status !== "idle" && <span className={`badge ${status === "error" ? "badge-error" : status === "completed" ? "badge-success" : "badge-indigo"}`} role="status">{status === "researching" ? "Live research" : status}</span>}
         </div>
+        <div className={activeTab === "research" ? "" : "hidden print:block"}>
         {status === "idle" ? <><ResearchInput value={question} setValue={setQuestion} mode={mode} setMode={setMode} maxSources={maxSources} setMaxSources={setMaxSources} filters={filters} setFilters={setFilters} targets={targets} setTargets={setTargets} disabled={false} onSubmit={run} budgets={budgets} setBudgets={setBudgets} /><EmptyState /></> :
           <div className="research-results grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,380px)]">
             <div className="min-w-0 space-y-6 no-print">
@@ -169,11 +178,12 @@ export function ResearchPage() {
               {snapshot && <details className="card"><summary className="cursor-pointer text-sm font-medium">Citation validation log ({snapshot.citation_rejections?.length || 0})</summary>{snapshot.citation_rejections?.length ? <ul className="mt-4 space-y-3 text-sm">{snapshot.citation_rejections.map((item, index) => <li key={index}><strong>{item.claim_id}</strong> · {item.source_id || item.evidence_id || "Report"}<p className="mt-1 text-slate-500">{item.reason}</p></li>)}</ul> : <p className="mt-3 text-sm text-slate-500">No citations have been rejected in this session.</p>}</details>}
             </div>
           </div>}
+        </div>
+        <section className="no-print"><ResearchChat key={snapshot && researchId ? researchId : generalChatId} researchId={snapshot && researchId ? researchId : generalChatId} state={snapshot && researchId ? snapshot : null} findings={session.findings} evidence={session.evidence} sources={session.sources} onPreview={setPreview} embedded={activeTab === "assistant"} /></section>
         {storageError && <p className="no-print mt-4 text-sm text-amber-700" role="alert">{storageError}</p>}
         <footer className="mx-auto mt-12 max-w-3xl border-t border-slate-200 py-8 text-center dark:border-slate-800 no-print"><p className="text-xs text-slate-500">Session-scoped research. Saved reports stay in this browser only.</p></footer>
       </main>
     </div>
     {preview && <SourcePreview source={preview} evidence={session.evidence} onClose={() => setPreview(null)} />}
-    {snapshot && researchId && <ResearchChat key={researchId} researchId={researchId} state={snapshot} findings={session.findings} evidence={session.evidence} sources={session.sources} onPreview={setPreview} />}
   </div>;
 }

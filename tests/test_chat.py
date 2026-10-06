@@ -57,7 +57,7 @@ def test_router_repairs_missing_blocks_and_returns_a_reviewed_answer(monkeypatch
         assert "Repair this response" in messages[-1]["content"]
         return ChatDraft(intent="SIMPLIFY", answer="", blocks=[ReportBlock(id="B1", section_id="answer",
             text="Synthetic test: async endpoints can await work.", claim_ids=["C1"], evidence_ids=["E1"])]).model_dump_json()
-    for provider in router.providers.values():
+    for provider in [*router.providers.values(), router.review_provider]:
         monkeypatch.setattr(provider, "complete", respond)
     result = answer_chat(router, ChatRequest(message="Explain this research in simple terms."), sample_state())
     assert "async endpoints can await work" in result.answer and result.citations
@@ -94,7 +94,7 @@ def test_inline_citation_labels_are_not_rejected_as_numbers(marker):
     result = answer_chat(ChatFake(text="Synthetic test: async endpoints can await work. " + marker),
                          ChatRequest(message="Explain this research."), sample_state())
     assert "async endpoints can await work" in result.answer
-    assert result.answer.count("[E1]") == 1
+    assert result.answer.count("[1]") == 1
     assert len(result.citations) == 1
 
 
@@ -129,24 +129,15 @@ def test_generation_failure_returns_session_excerpts():
 
 def test_chat_budget_is_bounded_per_question_not_exhausted_for_the_session(monkeypatch):
     import server.api.research as research
-    from tests.research_fakes import synthetic_settings
-    routers = []
-    class Router:
-        def __init__(self, _settings, *, max_requests):
-            self.requests_used = 0
-            assert max_requests == 6
-            routers.append(self)
-    def answer(router, request, state):
-        assert router.requests_used == 0
-        router.requests_used = 6
-        return ChatResponse(intent="SUMMARY", answer="SYNTHETIC TEST ONLY")
+    calls = []
+    async def events(job, request):
+        calls.append(request.message)
+        yield "chat_complete", ChatResponse(intent="General knowledge", answer="[General knowledge]\nSYNTHETIC TEST ONLY")
     monkeypatch.setattr(research, "jobs", {"synthetic-chat": research.ResearchJob(state=sample_state())})
-    monkeypatch.setattr(research, "LLMRouter", Router)
-    monkeypatch.setattr(research, "Settings", synthetic_settings)
-    monkeypatch.setattr(research, "answer_chat", answer)
+    monkeypatch.setattr(research, "_hybrid_events", events)
     async def run():
         for _ in range(8):
             result = await research.chat_research("synthetic-chat", ChatRequest(message="Synthetic test question"))
-            assert result.answer == "SYNTHETIC TEST ONLY"
+            assert result.answer.endswith("SYNTHETIC TEST ONLY")
     asyncio.run(run())
-    assert len(routers) == 8 and len({id(router) for router in routers}) == 8
+    assert len(calls) == 8

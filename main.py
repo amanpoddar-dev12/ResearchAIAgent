@@ -22,7 +22,7 @@ def main() -> int:
     if args.check_config:
         try:
             settings.validate_configuration()
-            print(f"Configuration valid. Routed models configured (Gemini: {settings.gemini_model}, Groq: {settings.groq_model}, Mistral: {settings.mistral_model}). Tavily configured: yes.")
+            print(f"Configuration valid. Routed models configured (Gemini: {settings.gemini_model}, Groq: {settings.groq_model}, Groq review: {settings.groq_review_model}). Tavily configured: yes.")
             return 0
         except ValueError as exc:
             print(f"Configuration error: {exc}")
@@ -39,7 +39,7 @@ def main() -> int:
     console = Console()
     try:
         with Progress(console=console) as progress:
-            console.print(f"AI RESEARCH AGENT\nLLM: routed Gemini/Groq/Mistral\nPrimary model: {settings.gemini_model}\nResearch question: {question}\n")
+            console.print(f"AI RESEARCH AGENT\nLLM: routed Gemini/Groq\nPrimary model: {settings.gemini_model}\nResearch question: {question}\n")
             task = progress.add_task("Planning...", total=None)
             state = ResearchAgent(settings).run(question)
             progress.update(task, description=f"Research complete: {state.searches_performed} searches, {len(state.sources)} sources")

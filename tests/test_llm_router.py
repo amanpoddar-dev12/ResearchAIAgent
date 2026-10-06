@@ -10,7 +10,7 @@ from app.llm import (
     LLMRequestBudgetExceeded, LLMRouter, ProviderAuthError, ProviderResponseError, ProviderTimeoutError,
 )
 from app.llm.routing import FINAL_REVIEW, PLANNING
-from app.llm.providers import GroqProvider, MistralProvider
+from app.llm.providers import GroqProvider
 from app.planner import Planner
 from app.models import ResearchPlan, ResearchQuestion
 
@@ -24,7 +24,7 @@ def settings(**changes):
         _env_file=None,
         gemini_api_key="gemini-key", gemini_model="gemini-free",
         groq_api_key="groq-key", groq_model="groq-free",
-        mistral_api_key="mistral-key", mistral_model="mistral-free",
+        groq_review_model="configured-review-model",
         tavily_api_key="tavily-key", llm_timeout_seconds=1, llm_max_retries=2,
     )
     values.update(changes)
@@ -53,7 +53,7 @@ def test_tasks_route_to_exactly_one_provider(monkeypatch):
         calls.append(kwargs["task"])
         return "{}"
 
-    for name, provider in router.providers.items():
+    for provider in [*router.providers.values(), router.review_provider]:
         monkeypatch.setattr(provider, "complete", complete)
     asyncio.run(router.complete([{"role": "user", "content": "x"}], task=PLANNING))
     asyncio.run(router.complete([{"role": "user", "content": "x"}], task=FINAL_REVIEW))
@@ -136,7 +136,7 @@ def test_concurrent_requests_cannot_overspend_budget(monkeypatch):
         await asyncio.sleep(0)
         return '{"value":"ok"}'
 
-    for provider in router.providers.values():
+    for provider in [*router.providers.values(), router.review_provider]:
         monkeypatch.setattr(provider, "complete", complete)
 
     async def run():
@@ -183,14 +183,14 @@ def test_missing_environment_configuration_names_variables():
         config.validate_configuration()
     message = str(error.value)
     for name in ("GEMINI_API_KEY", "GEMINI_MODEL", "GROQ_API_KEY", "GROQ_MODEL",
-                 "MISTRAL_API_KEY", "MISTRAL_MODEL", "TAVILY_API_KEY",
+                 "TAVILY_API_KEY",
                  "LLM_TIMEOUT_SECONDS", "LLM_MAX_RETRIES"):
         assert name in message
 
 
 @pytest.mark.parametrize(
     ("provider_type", "model"),
-    [(GroqProvider, "configured-groq-model"), (MistralProvider, "configured-mistral-model")],
+    [(GroqProvider, "configured-groq-model")],
 )
 def test_openai_compatible_provider_sends_exact_model_and_api_key(monkeypatch, provider_type, model):
     captured = {}
@@ -215,3 +215,28 @@ def test_planner_passes_routing_task_not_prompt_text():
 
     Planner(PlannerLLM()).create_plan(ResearchQuestion(question="A research question"))
     assert calls == ["planning"]
+
+
+@pytest.mark.parametrize("task", ["fact_verification", "independent_review", "final_review"])
+def test_review_tasks_reuse_groq_key_with_separate_review_model(monkeypatch, task):
+    captured = {}
+    def fake_post(endpoint, headers, json, timeout):
+        captured.update(endpoint=endpoint, headers=headers, payload=json)
+        return httpx.Response(200, json=chat_payload('{"value":"checked"}'))
+    monkeypatch.setattr(httpx, "post", fake_post)
+    config = settings(groq_review_model="qwen/qwen3.8-27b")
+    config.validate_configuration()
+    router = LLMRouter(config)
+    result = asyncio.run(router.complete([], task=task, response_model=Result))
+    assert result.value == "checked"
+    assert captured["endpoint"] == GroqProvider.endpoint
+    assert captured["headers"]["Authorization"] == "Bearer groq-key"
+    assert captured["payload"]["model"] == config.groq_review_model
+    assert captured["payload"]["reasoning_format"] == "hidden"
+    assert router.providers["groq"].model == config.groq_model
+    assert set(router.providers) == {"gemini", "groq"}
+
+
+def test_blank_review_model_is_rejected():
+    with pytest.raises(ValueError, match="GROQ_REVIEW_MODEL"):
+        settings(groq_review_model=" ").validate_configuration()

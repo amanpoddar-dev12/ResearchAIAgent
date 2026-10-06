@@ -10,8 +10,7 @@ class Settings(BaseSettings):
     gemini_model: str = Field(default="")
     groq_api_key: str = Field(default="")
     groq_model: str = Field(default="")
-    mistral_api_key: str = Field(default="")
-    mistral_model: str = Field(default="")
+    groq_review_model: str = Field(default="qwen/qwen3.8-27b")
     tavily_api_key: str = Field(default="")
     max_searches: int = Field(default=10, ge=1)
     max_sources: int = Field(default=15, ge=1)
@@ -35,7 +34,7 @@ class Settings(BaseSettings):
         for name, value in (
             ("GEMINI_API_KEY", self.gemini_api_key), ("GEMINI_MODEL", self.gemini_model),
             ("GROQ_API_KEY", self.groq_api_key), ("GROQ_MODEL", self.groq_model),
-            ("MISTRAL_API_KEY", self.mistral_api_key), ("MISTRAL_MODEL", self.mistral_model),
+            ("GROQ_REVIEW_MODEL", self.groq_review_model),
             ("TAVILY_API_KEY", self.tavily_api_key),
             ("LLM_TIMEOUT_SECONDS", self.llm_timeout_seconds), ("LLM_MAX_RETRIES", self.llm_max_retries),
         ):

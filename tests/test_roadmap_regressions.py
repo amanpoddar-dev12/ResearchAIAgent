@@ -69,7 +69,7 @@ def test_real_router_pipeline_schemas_budgets_and_reports(monkeypatch, mode):
             pytest.fail(f"Unexpected task {task}")
         return result.model_dump_json()
 
-    for provider in router.providers.values():
+    for provider in [*router.providers.values(), router.review_provider]:
         monkeypatch.setattr(provider, "complete", respond)
     monkeypatch.setattr("app.agent.GeminiClient", lambda *_args, **_kwargs: router)
     monkeypatch.setattr("app.researcher.search_web", synthetic_search)
@@ -138,7 +138,7 @@ def test_router_reservations_are_safe_across_threads_and_event_loops(monkeypatch
     router.reserved_final_calls = 2
     async def respond(*_args, **_kwargs):
         return "Synthetic response"
-    for provider in router.providers.values():
+    for provider in [*router.providers.values(), router.review_provider]:
         monkeypatch.setattr(provider, "complete", respond)
     def request():
         try:

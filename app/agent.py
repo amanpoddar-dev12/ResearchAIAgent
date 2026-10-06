@@ -143,7 +143,7 @@ class ResearchAgent:
             for finding in state.findings:
                 verification = Verification(claim_id=finding.id, status=finding.evidence_status,
                     supporting_count=len(finding.supporting_evidence_ids), contradicting_count=len(finding.contradicting_evidence_ids),
-                    verified_by=(["gemini"] if finding.evidence_assessments else []) + (["mistral"] if finding.id in reviewed_claims else []),
+                    verified_by=(["gemini"] if finding.evidence_assessments else []) + (["groq"] if finding.id in reviewed_claims else []),
                     reasoning="; ".join(item.reasoning for item in finding.evidence_assessments) or "Exact quotation or insufficient reviewed evidence.",
                     confidence_score=finding.confidence_score)
                 state.verifications.append(verification)
