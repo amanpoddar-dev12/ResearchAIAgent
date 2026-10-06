@@ -1,5 +1,9 @@
 import os
 import logging
+import asyncio
+import tempfile
+from pathlib import Path
+from uuid import uuid4
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Query
@@ -124,3 +128,35 @@ async def research_chat_stream(research_id: str, request: AssistantRequest) -> S
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return StreamingResponse(stream_chat(research_id, request), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+_pdf_upload_slots = asyncio.Semaphore(2)
+@app.post("/api/assistant/pdf")
+async def upload_assistant_pdf(request: Request, name: str = Query(default="document.pdf", min_length=1, max_length=200)):
+    from app.pdf_documents import MAX_UPLOAD_BYTES, process_pdf
+    if not name.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Upload a PDF file.")
+    async with _pdf_upload_slots:
+        with tempfile.TemporaryDirectory(prefix="research-pdf-") as folder:
+            path = Path(folder) / "upload.pdf"
+            size = 0
+            with path.open("wb") as target:
+                async for data in request.stream():
+                    size += len(data)
+                    if size > MAX_UPLOAD_BYTES:
+                        raise HTTPException(status_code=413, detail="PDFs must be 25 MB or smaller. Split the document and try again.")
+                    target.write(data)
+            with path.open("rb") as source:
+                if not source.read(1024).lstrip().startswith(b"%PDF-"):
+                    raise HTTPException(status_code=400, detail="This file is not a valid PDF.")
+            try:
+                result = await asyncio.to_thread(process_pdf, str(path), str(Path(folder) / "result.json"))
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return {"id": str(uuid4()), "name": name, **result}
+
+
+@app.get("/api/assistant/research-ideas")
+async def assistant_research_ideas():
+    from app.research_ideas import recent_ideas
+    return {"ideas": await recent_ideas()}

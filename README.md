@@ -66,7 +66,15 @@ Source-quality scores are transparent heuristics, not verified authority or prob
 
 Search coverage and source quality vary; LLM reasoning can be wrong; citations should be checked for important work; this is not a substitute for professional research. Web pages can contain prompt injection, so their text is passed as evidence only and never as application instructions.
 
-Backend jobs, documents, evidence, replay buffers, and chat budgets are process-local and temporary. The service admits up to three active jobs and retains at most twenty sessions, with completed sessions expiring after thirty minutes. A restart loses sessions; independent workers do not share them. Webpage extraction supports bounded HTML/plain text; PDF documents are not parsed (`server/api/research.py`, `tools/webpage.py`).
+Backend jobs, documents, evidence, replay buffers, and chat budgets are process-local and temporary. The service admits up to three active jobs and retains at most twenty sessions, with completed sessions expiring after thirty minutes. A restart loses sessions; independent workers do not share them. Webpage extraction supports bounded HTML/plain text; the separate assistant upload supports searchable PDFs (`server/api/research.py`, `tools/webpage.py`).
+
+## Assistant PDFs and local conversations
+
+The main-page chatbot and sidebar assistant share the same chat. Use the paperclip to upload a searchable PDF (up to 25 MB, 2,000 pages, or 8 million extracted characters). Extraction runs in a disposable process with a 90-second limit. Scanned/image-only and encrypted PDFs require a searchable, unencrypted copy. The browser indexes the extracted text in a worker and sends at most eight relevant chunks per question to the existing Gemini integration. Page citations open extracted evidence; summaries describe retrieved excerpts rather than claiming full-document coverage.
+
+Chat history, drafts, research snapshots, and extracted PDF text are stored locally in browser IndexedDB. Previous conversations can be reopened without API calls. New chat starts with no document attached; removing a PDF restores normal research/general chat. Clearing browser site data removes these local conversations and attachments. Uploaded source files are temporary on the server; extracted excerpts are sent to Gemini when answering.
+
+Main-page ideas rotate every five minutes and on page opening. Recent Tavily search titles are cached for six hours; when search is unavailable, dated research prompts are composed locally. No LLM call is used for suggestions or loading local chat history.
 
 ## Tests
 

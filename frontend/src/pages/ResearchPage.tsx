@@ -19,6 +19,7 @@ import { ResearchQuality } from "../components/ResearchQuality";
 import { ResearchInsights } from "../components/ResearchInsights";
 import { ClaimExplorer } from "../components/ClaimExplorer";
 import { ResearchGaps } from "../components/ResearchGaps";
+import { generalChatId as getGeneralChatId } from "../storage/chatStorage";
 import { ResearchChat } from "../components/ResearchChat";
 import { startResearch, streamResearch, cancelResearch } from "../services/api";
 import { emptyFilters } from "../types/research";
@@ -29,7 +30,7 @@ import { deleteSavedResearch, clearSavedResearch, listSavedResearch, saveResearc
 import { citationCoverage, evidenceCount, highQualitySources, relevantSources, researchCoverage, verifiedClaims } from "../scoring/metrics";
 
 export function ResearchPage() {
-  const [generalChatId] = useState(() => `general-chat-${crypto.randomUUID()}`);
+  const [generalChatId] = useState(getGeneralChatId);
   const [activeTab, setActiveTab] = useState<"research" | "assistant">("research");
   const [question, setQuestion] = useState("");
   const [mode, setMode] = useState<ResearchMode>("quick");

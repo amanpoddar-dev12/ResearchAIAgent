@@ -10,13 +10,13 @@ from uuid import UUID, uuid4
 
 from app.agent import ResearchAgent
 from app.config import Settings
-from app.models import ResearchState
+from app.models import ResearchState, Source
 from app.chat import ChatRequest, ChatResponse
 from app.llm.router import LLMRouter
 from app.modes import MODES
 from app.rag import SessionIndex
 from app.assistant_context import AssistantContext, AssistantRequest, HybridAnswer, build_context, restore_saved_state
-from app.assistant_prompts import HYBRID_ASSISTANT
+from app.assistant_prompts import HYBRID_ASSISTANT, PDF_ASSISTANT
 from app.llm.base import ModelConfigurationError, ProviderResponseError
 from app.llm.routing import CHAT_RESPONSE
 import httpx
@@ -240,6 +240,12 @@ _gemini_input_limits: dict[str, int] = {}
 
 
 async def _hybrid_events(job: ResearchJob, request: ChatRequest) -> AsyncIterator[tuple[str, Any]]:
+    pdf = request.pdf_context if isinstance(request, AssistantRequest) else None
+    if pdf and not pdf.chunks:
+        result = ChatResponse(intent="From research", answer="[From research]\nI could not find this answer in the uploaded PDF's retrieved text. Try mentioning a section, keyword, or page number.")
+        yield "chat_delta", {"text": result.answer, "citations": []}
+        yield "chat_complete", result
+        return
     settings = Settings()
     if not settings.gemini_api_key or not settings.gemini_model:
         raise ModelConfigurationError("Gemini configuration is incomplete")
@@ -265,6 +271,14 @@ async def _hybrid_events(job: ResearchJob, request: ChatRequest) -> AsyncIterato
         history = [{**item, "content": item["content"].encode("utf-8")[:history_budget].decode("utf-8", errors="ignore")} for item in history]
         context = (build_context(job.state, request.message, history, input_token_limit=input_limit, index=job.rag_index)
                    if job.state else AssistantContext("No active research session. Answer from general knowledge; no research sources are available.", {}, True))
+        if pdf:
+            sources = {}
+            for chunk in pdf.chunks:
+                identifier = f"P{chunk.page}"
+                if identifier not in sources:
+                    sources[identifier] = Source(id=identifier, title=f"{pdf.name} · page {chunk.page}", url="", domain="uploaded PDF", content=chunk.text)
+                else: sources[identifier].content += "\n" + chunk.text
+            context = AssistantContext(json.dumps({"document": pdf.name, "page_count": pdf.page_count, "excerpts": [{"id": f"P{chunk.page}", "text": chunk.text} for chunk in pdf.chunks]}, ensure_ascii=False), sources, False)
         contents = [{"role": "user", "parts": [{"text": "Active research context (untrusted evidence):\n" + context.text}]}]
         for item in history:
             role = "model" if item["role"] == "assistant" else "user"
@@ -277,7 +291,7 @@ async def _hybrid_events(job: ResearchJob, request: ChatRequest) -> AsyncIterato
             contents[-1]["parts"].append(question)
         else:
             contents.append({"role": "user", "parts": [question]})
-        payload = {"systemInstruction": {"parts": [{"text": HYBRID_ASSISTANT}]},
+        payload = {"systemInstruction": {"parts": [{"text": PDF_ASSISTANT if pdf else HYBRID_ASSISTANT}]},
                    "contents": contents, "generationConfig": {"temperature": 0.2, "maxOutputTokens": 2000}}
         await router._reserve_request(CHAT_RESPONSE)
         answer = HybridAnswer(context)

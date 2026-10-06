@@ -181,3 +181,23 @@ def test_general_chat_streams_without_research_and_keeps_no_server_state(gemini,
         research.assistant_job("general-chat-invalid", request)
     with pytest.raises(LookupError):
         research.assistant_job("expired-research", request)
+
+
+def test_pdf_answers_use_only_retrieved_pages_and_validate_citations(gemini):
+    import server.api.research as research
+    calls, replies = gemini
+    replies.append("[From research]\nQuantum throughput is 42 units per hour [P300]. Cost is not in these excerpts [P999].")
+    request = AssistantRequest(message="What is quantum throughput?", pdf_context={"document_id":"document", "name":"large.pdf", "page_count":1000,"chunks":[{"page":300,"text":"Quantum throughput is 42 units per hour."}]})
+    async def run():
+        events = [event async for event in research._hybrid_events(research.ResearchJob(state=sample_state()), request)]
+        answer = events[-1][1]
+        assert [item.source_id for item in answer.citations] == ["P300"]
+        assert "[P999]" not in answer.answer
+        assert answer.citations[0].url is None
+        assert "42 units" in answer.citations[0].supporting_text
+    asyncio.run(run())
+    assert len(calls) == 1
+    assert "uploaded PDF ONLY" in calls[0]["systemInstruction"]["parts"][0]["text"]
+    context = calls[0]["contents"][0]["parts"][0]["text"]
+    assert "Quantum throughput" in context
+    assert "FastAPI" not in context

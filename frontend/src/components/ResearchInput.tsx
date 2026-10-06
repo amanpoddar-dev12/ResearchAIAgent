@@ -1,3 +1,5 @@
+import { useEffect, useState } from "react";
+import { freshResearchIdeas, loadResearchIdeas, randomIdeas } from "../services/researchIdeas";
 import { ArrowUp, Sparkles } from "lucide-react";
 import { modes, sourceTypes } from "../types/research";
 import type { ResearchMode, SourceFilters, ResearchBudgets } from "../types/research";
@@ -12,6 +14,14 @@ interface Props {
   budgets: ResearchBudgets; setBudgets: (value: ResearchBudgets) => void;
 }
 export function ResearchInput({ value, setValue, mode, setMode, maxSources, setMaxSources, filters, setFilters, targets, setTargets, disabled, onSubmit, budgets, setBudgets }: Props) {
+  const [ideas, setIdeas] = useState(() => randomIdeas(freshResearchIdeas()));
+  useEffect(() => {
+    let active = true;
+    let pool = freshResearchIdeas();
+    loadResearchIdeas().then((items) => { pool = items; if (active) setIdeas(randomIdeas(pool)); });
+    const timer = window.setInterval(() => setIdeas(randomIdeas(pool)), 5 * 60000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
   const splitDomains = (value: string) => value.split(",").map((item) => item.trim()).filter(Boolean);
   const invalidDates = Boolean(filters.date_from && filters.date_to && filters.date_from > filters.date_to);
   const invalidTargets = mode === "compare" && new Set(targets.split("\n").map((item) => item.trim()).filter(Boolean)).size < 2;
@@ -21,7 +31,7 @@ export function ResearchInput({ value, setValue, mode, setMode, maxSources, setM
       <p className="mt-3 text-sm text-slate-500">Choose a research strategy, refine your sources, and inspect the evidence.</p>
     </div>
     <div className="mb-4 flex flex-wrap justify-center gap-2" aria-label="Example research questions">
-      {["Compare FastAPI and Django for an AI backend.", "What evidence supports renewable energy adoption?", "Fact-check a technical claim"].map((example) => <button key={example} type="button" className="chip" onClick={() => setValue(example)}>{example}</button>)}
+      {ideas.map((example) => <button key={example} type="button" className="chip" onClick={() => setValue(example)}>{example}</button>)}
     </div>
     <form onSubmit={(event) => { event.preventDefault(); if (!invalidDates && !invalidTargets) onSubmit(); }} className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <fieldset disabled={disabled} className="space-y-4">

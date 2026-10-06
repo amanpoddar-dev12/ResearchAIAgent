@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import Field
 
 from app.chat import ChatCitation, ChatRequest, ChatResponse
+from app.pdf_documents import PDFContext
 from app.models import ResearchState, Source
 from app.rag import SessionIndex
 
@@ -18,6 +19,7 @@ class AssistantRequest(ChatRequest):
     # Browser-saved sessions can be used after the process-local job expires.
     # Existing live jobs always take precedence over this untrusted snapshot.
     saved_state: dict[str, Any] | None = Field(default=None, max_length=100)
+    pdf_context: PDFContext | None = None
 
 
 def restore_saved_state(request: AssistantRequest) -> ResearchState | None:
@@ -163,8 +165,8 @@ class HybridAnswer:
         if not final and opening >= 0 and "]" not in self.pending[opening:]:
             cut = opening
         raw, self.pending = self.pending[:cut], self.pending[cut:]
-        if final and re.search(r"\[S[^\]\n]*$", raw):
-            raw = re.sub(r"\[S[^\]\n]*$", "[uncertain]", raw)
+        if final and re.search(r"\[[SP][^\]\n]*$", raw):
+            raw = re.sub(r"\[[SP][^\]\n]*$", "[uncertain]", raw)
             self.invalid_citations = True
         offset = len(self.raw_body) - len(raw) - len(self.pending)
         general = re.search(r"(?im)^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:General knowledge|\[General knowledge\])(?:\*\*)?\s*:?", self.raw_body)
@@ -175,10 +177,10 @@ class HybridAnswer:
                 self.invalid_citations = True
                 return "[uncertain]"
             source = self.context.sources[source_id]
-            self.references[source_id] = ChatCitation(citation_id=source_id, source_id=source_id, title=source.title, url=source.url)
+            self.references[source_id] = ChatCitation(citation_id=source_id, source_id=source_id, title=source.title, url=source.url or None, supporting_text=source.content[:2000] if source_id.startswith("P") else None)
             return match.group()
 
-        safe = re.sub(r"\[S[A-Za-z0-9_.-]*\]", citation, raw)
+        safe = re.sub(r"\[[SP][A-Za-z0-9_.-]*\]", citation, raw)
         for tag in ["From research", "General knowledge", "Mixed"]:
             safe = safe.replace(f"[{tag}]", "General knowledge:" if tag == "General knowledge" else "")
         self.answer += safe
