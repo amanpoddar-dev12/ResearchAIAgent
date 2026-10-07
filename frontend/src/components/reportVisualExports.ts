@@ -1,6 +1,6 @@
 import type { ChartSpec, ResearchSource } from "../types/research";
 
-export const chartColors = ["#4f46e5", "#0f766e", "#d97706", "#be123c", "#7c3aed", "#0891b2"];
+export const chartColors = Array.from({ length: 6 }, (_, index) => `hsl(var(--chart-${index + 1}))`);
 const finiteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
 /** Keep missing measurements missing; never turn null or numeric-looking text into zero. */
@@ -32,15 +32,15 @@ export function chartCsv(chart: ChartSpec, rows = chartRows(chart)) {
 export function chartLegend(chart: ChartSpec, rows = chartRows(chart)) {
   return chart.type === "pie"
     ? rows.filter((row) => finiteNumber(row[chart.series[0]?.key])).map((row, index) => ({ label: String(row[chart.x_key]), color: chartColors[index % chartColors.length] }))
-    : chart.series.map((series, index) => ({ label: series.label, color: series.color || chartColors[index % chartColors.length] }));
+    : chart.series.map((series, index) => ({ label: series.label, color: chartColors[index % chartColors.length] }));
 }
 
 function backgroundColor(element: Element) {
   for (let node: Element | null = element; node; node = node.parentElement) {
     const color = getComputedStyle(node).backgroundColor;
-    if (color && color !== "transparent" && color !== "rgba(0, 0, 0, 0)") return color;
+    if (color && color !== "transparent" && !/^rgba\([^)]*,\s*0\)$/.test(color)) return color;
   }
-  return "#ffffff";
+  return `hsl(${getComputedStyle(document.documentElement).getPropertyValue("--card").trim()})`;
 }
 
 /** Preserve the actual Recharts surface and the styles it inherits from the page. */
@@ -64,7 +64,7 @@ export function serializeChartSvg(surface: SVGSVGElement, chart: ChartSpec, sour
   const ns = "http://www.w3.org/2000/svg";
   const output = document.createElementNS(ns, "svg");
   const width = Math.max(360, Math.ceil(plotWidth + 48));
-  const foreground = getComputedStyle(surface).color || "#0f172a";
+  const foreground = getComputedStyle(surface).color || `hsl(${getComputedStyle(surface).getPropertyValue("--foreground").trim()})`;
   const background = document.createElementNS(ns, "rect");
   background.setAttribute("width", "100%"); background.setAttribute("height", "100%");
   background.setAttribute("fill", backgroundColor(surface)); output.append(background);
@@ -75,8 +75,8 @@ export function serializeChartSvg(surface: SVGSVGElement, chart: ChartSpec, sour
     for (const wordsOnLine of lines) {
       const node = document.createElementNS(ns, "text");
       node.setAttribute("x", String(inset)); node.setAttribute("y", String(y));
-      node.setAttribute("fill", foreground); node.setAttribute("font-family", "Arial, sans-serif");
-      node.setAttribute("font-size", String(size)); node.setAttribute("font-weight", bold ? "600" : "400");
+      node.setAttribute("fill", foreground); node.setAttribute("font-family", "Inter, system-ui, sans-serif");
+      node.setAttribute("font-size", String(size)); node.setAttribute("font-weight", bold ? "500" : "400");
       node.textContent = wordsOnLine.trim(); output.append(node); y += size * 1.5;
     }
   };
@@ -88,7 +88,7 @@ export function serializeChartSvg(surface: SVGSVGElement, chart: ChartSpec, sour
   for (const item of chartLegend(chart)) {
     const key = document.createElementNS(ns, "rect");
     key.setAttribute("x", "24"); key.setAttribute("y", String(y - 9));
-    key.setAttribute("width", "10"); key.setAttribute("height", "10"); key.setAttribute("fill", item.color);
+    key.setAttribute("width", "10"); key.setAttribute("height", "10"); key.setAttribute("fill", item.color.replace(/var\((--[\w-]+)\)/g, (_, token) => getComputedStyle(surface).getPropertyValue(token).trim()));
     output.append(key); line(item.label, 11, false, 42);
   }
   y += 10;

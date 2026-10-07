@@ -1,3 +1,4 @@
+import { useTheme } from "../theme";
 import { useEffect, useReducer, useRef, useState } from "react";
 import { Header } from "../components/Header";
 import { Sidebar } from "../components/Sidebar";
@@ -40,8 +41,8 @@ export function ResearchPage() {
   const [targets, setTargets] = useState("");
   const [session, dispatch] = useReducer(researchReducer, initialResearchSession);
   const [preview, setPreview] = useState<ResearchSource | null>(null);
-  const [dark, setDark] = useState(() => localStorage.getItem("research-theme") === "dark");
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const { theme, setTheme, dark, cycleTheme } = useTheme();
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia("(min-width: 768px)").matches);
   const [elapsed, setElapsed] = useState(0);
   const [saved, setSaved] = useState<SavedResearch[]>([]);
   const [storageError, setStorageError] = useState("");
@@ -54,10 +55,6 @@ export function ResearchPage() {
 
   useEffect(() => () => { generation.current++; cleanup.current?.(); }, []);
   useEffect(() => {
-    document.documentElement.classList.toggle("dark", dark);
-    localStorage.setItem("research-theme", dark ? "dark" : "light");
-  }, [dark]);
-  useEffect(() => {
     if (status !== "researching") return;
     const started = Date.now();
     const timer = window.setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
@@ -65,7 +62,7 @@ export function ResearchPage() {
   }, [status]);
   useEffect(() => {
     listSavedResearch().then(setSaved);
-    const closeSidebar = () => setSidebarOpen(false);
+    const closeSidebar = () => { if (window.matchMedia("(max-width: 767px)").matches) setSidebarOpen(false); };
     const escape = (event: KeyboardEvent) => { if (event.key === "Escape") closeSidebar(); };
     window.addEventListener("hashchange", closeSidebar);
     document.addEventListener("keydown", escape);
@@ -134,14 +131,14 @@ export function ResearchPage() {
 
   const researchId = session.events.find((event) => event.research_id)?.research_id || restoredResearchId;
   return <div className="app-shell min-h-screen">
-    <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} onNew={reset} saved={saved} onOpenSaved={openSaved} onRenameSaved={renameSaved} onDeleteSaved={removeSaved} onClearSaved={clearSaved} activeView={activeTab} onViewChange={setActiveTab} />
-    <div className="lg:pl-64">
-      <Header dark={dark} onTheme={() => setDark((old) => !old)} onNew={reset} onMenu={() => setSidebarOpen(true)} status={status} mode={mode} />
-      <main id="main-content" className="mx-auto max-w-7xl overflow-x-hidden px-4 py-8 sm:px-6 lg:px-8">
-        <div className="mb-8 flex flex-wrap items-end justify-between gap-4 no-print">
-          <div><p className="eyebrow">{activeTab === "assistant" ? "Research Assistant" : "Research workspace"}</p><h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">{activeTab === "assistant" ? "Chat with your assistant" : snapshot?.question.refined_question || question || "Start with a research question"}</h1></div>
+    <Sidebar open={sidebarOpen} onClose={() => { if (window.matchMedia("(max-width: 767px)").matches) setSidebarOpen(false); }} onNew={reset} saved={saved} onOpenSaved={openSaved} onRenameSaved={renameSaved} onDeleteSaved={removeSaved} onClearSaved={clearSaved} activeView={activeTab} onViewChange={setActiveTab} theme={theme} onTheme={setTheme} />
+    <div className={sidebarOpen ? "md:pl-[260px]" : ""}>
+      <Header dark={dark} onTheme={cycleTheme} onNew={reset} onMenu={() => setSidebarOpen((open) => !open)} status={status} mode={mode} />
+      <main id="main-content" className="mx-auto max-w-7xl overflow-x-hidden px-6 py-8 lg:px-8">
+        {(activeTab === "assistant" || status !== "idle") && <div className="mb-8 flex flex-wrap items-end justify-between gap-4 no-print">
+          <div><p className="eyebrow">{activeTab === "assistant" ? "Research Assistant" : "Research workspace"}</p><h1 className="mt-2 text-2xl font-medium tracking-tight sm:text-3xl">{activeTab === "assistant" ? "Chat with your assistant" : snapshot?.question.refined_question || question || "Start with a research question"}</h1></div>
           {status !== "idle" && <span className={`badge ${status === "error" ? "badge-error" : status === "completed" ? "badge-success" : "badge-indigo"}`} role="status">{status === "researching" ? "Live research" : status}</span>}
-        </div>
+        </div>}
         <div className={activeTab === "research" ? "" : "hidden print:block"}>
         {status === "idle" ? <><ResearchInput value={question} setValue={setQuestion} mode={mode} setMode={setMode} maxSources={maxSources} setMaxSources={setMaxSources} filters={filters} setFilters={setFilters} targets={targets} setTargets={setTargets} disabled={false} onSubmit={run} budgets={budgets} setBudgets={setBudgets} /><EmptyState /></> :
           <div className="research-results grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,380px)]">
@@ -149,26 +146,28 @@ export function ResearchPage() {
               <ResearchProgress events={session.events} status={status} hasReport={Boolean(session.report)} mode={mode} sources={session.sources} />
               <ResearchTimeline events={session.events} status={status} />
               {status === "researching" && researchId && <button className="button-secondary" onClick={() => void cancelResearch(researchId).catch((error: Error) => dispatch({ type: "error", message: error.message }))}>Cancel research</button>}
-              {status === "completed" && snapshot?.completion_quality === "partial" && <p className="text-sm text-amber-700 dark:text-amber-300" role="status">Report ready with unresolved evidence gaps. Review the limitations before using its conclusions.</p>}
-              {snapshot && <div className="metric-grid">
+              {status === "completed" && snapshot?.completion_quality === "partial" && <p className="text-sm text-warning dark:text-warning" role="status">Report ready with unresolved evidence gaps. Review the limitations before using its conclusions.</p>}
+              {snapshot && <section aria-label="Research overview"><div className="grid gap-3 sm:grid-cols-3">
                 <MetricCard label="Sources found" value={session.sources.length} description="Number of sources discovered in this session." />
+                <MetricCard label="Supported claims" value={verifiedClaims(snapshot).value ?? "Not available"} description={verifiedClaims(snapshot).formula} />
+                <MetricCard label="Reported gaps" value={session.gaps.length} description="Number of research gaps reported in this session. A zero count does not prove complete coverage." />
+              </div><details className="mt-3 rounded-xl border border-border p-4"><summary className="cursor-pointer text-sm text-muted-foreground">More research metrics</summary><div className="metric-grid mt-4">
                 <MetricCard label="Relevant sources" value={relevantSources(session.sources, snapshot.relevance_threshold ?? 0.3).value ?? "Not available"} description={relevantSources(session.sources, snapshot.relevance_threshold ?? 0.3).formula} />
                 <MetricCard label="High-quality sources" value={highQualitySources(session.sources).value ?? "Not available"} description={highQualitySources(session.sources).formula} />
                 <MetricCard label="Claims" value={session.findings.length} description="Number of findings reported by the research state." />
-                <MetricCard label="Verified claims" value={verifiedClaims(snapshot).value ?? "Not available"} description={verifiedClaims(snapshot).formula} />
                 <MetricCard label="Conflicts" value={session.conflicts.length} description="Conflicts detected from linked claims and evidence." />
                 <MetricCard label="Research coverage" value={researchCoverage(snapshot).value === null ? "Not available" : `${Math.round(researchCoverage(snapshot).value! * 100)}%`} description={researchCoverage(snapshot).formula} />
                 <MetricCard label="Evidence" value={evidenceCount(snapshot).value ?? "Not available"} description={evidenceCount(snapshot).formula} />
                 <MetricCard label="Citation coverage" value={citationCoverage(snapshot).value === null ? "Not available" : `${Math.round(citationCoverage(snapshot).value! * 100)}%`} description={citationCoverage(snapshot).formula} />
-              </div>}
-              {status === "researching" && <p className="text-xs text-slate-500" role="timer">Elapsed time: {Math.floor(elapsed / 60)}m {elapsed % 60}s</p>}
+              </div></details></section>}
+              {status === "researching" && <p className="text-xs text-muted-foreground" role="timer">Elapsed time: {Math.floor(elapsed / 60)}m {elapsed % 60}s</p>}
               {session.error && <div role="alert" className="error-state"><p className="font-medium">Research interrupted</p><p className="mt-1 text-sm">{session.error}</p><button onClick={run} className="button-secondary mt-3">Retry Research</button></div>}
-              {snapshot && <div className="card text-sm"><p><strong>Research scope:</strong> {snapshot.question.refined_question || snapshot.question.question}</p>{snapshot.question.assumptions?.map((assumption) => <p key={assumption} className="mt-2 text-xs text-slate-500">Assumption: {assumption}</p>)}</div>}
+              {snapshot && <div className="card text-sm"><p><strong>Research scope:</strong> {snapshot.question.refined_question || snapshot.question.question}</p>{snapshot.question.assumptions?.map((assumption) => <p key={assumption} className="mt-2 text-xs text-muted-foreground">Assumption: {assumption}</p>)}</div>}
               {snapshot?.graph && <ResearchGraph graph={snapshot.graph} sources={session.sources} onPreview={setPreview} />}
-              {session.findings.length > 0 && <section id="findings"><h2 className="mb-3 text-lg font-semibold">Findings and evidence</h2><div className="grid gap-4">{session.findings.map((finding, index) => <FindingCard key={finding.id || index} finding={finding} sources={session.sources} evidence={session.evidence} onPreview={setPreview} />)}</div></section>}
+              {session.findings.length > 0 && <section id="findings"><h2 className="mb-3 text-lg font-medium">Findings and evidence</h2><div className="grid gap-4">{session.findings.map((finding, index) => <FindingCard key={finding.id || index} finding={finding} sources={session.sources} evidence={session.evidence} onPreview={setPreview} />)}</div></section>}
               {session.findings.length > 0 && <ClaimExplorer findings={session.findings} evidence={session.evidence} sources={session.sources} verifications={session.verifications} onPreview={setPreview} />}
               {session.evidence.length > 0 && <EvidenceExplorer evidence={session.evidence} findings={session.findings} sources={session.sources} onPreview={setPreview} />}
-              {session.conflicts.length > 0 && <section id="conflicts"><h2 className="mb-3 text-lg font-semibold">Conflicts</h2><div className="space-y-3">{session.conflicts.map((conflict, index) => <ConflictCard key={index} conflict={conflict} sources={session.sources} evidence={session.evidence} onPreview={setPreview} />)}</div></section>}
+              {session.conflicts.length > 0 && <section id="conflicts"><h2 className="mb-3 text-lg font-medium">Conflicts</h2><div className="space-y-3">{session.conflicts.map((conflict, index) => <ConflictCard key={index} conflict={conflict} sources={session.sources} evidence={session.evidence} onPreview={setPreview} />)}</div></section>}
               {snapshot && <ResearchQuality state={snapshot} />}
               {session.gaps.length > 0 && <ResearchGaps gaps={session.gaps} />}
             </div>
@@ -176,15 +175,15 @@ export function ResearchPage() {
             {session.report && <div className="report-full-width"><ResearchReport markdown={session.report} structured={snapshot?.structured_report} sources={session.sources} onPreview={setPreview} /></div>}
             <div className="report-support-panels report-full-width no-print">
               {snapshot && <details className="report-support-panel"><summary>Research insights</summary><ResearchInsights state={snapshot} findings={session.findings} /></details>}
-              {snapshot && <details className="card"><summary className="cursor-pointer text-sm font-medium">Citation validation log ({snapshot.citation_rejections?.length || 0})</summary>{snapshot.citation_rejections?.length ? <ul className="mt-4 space-y-3 text-sm">{snapshot.citation_rejections.map((item, index) => <li key={index}><strong>{item.claim_id}</strong> · {item.source_id || item.evidence_id || "Report"}<p className="mt-1 text-slate-500">{item.reason}</p></li>)}</ul> : <p className="mt-3 text-sm text-slate-500">No citations have been rejected in this session.</p>}</details>}
+              {snapshot && <details className="card"><summary className="cursor-pointer text-sm font-medium">Citation validation log ({snapshot.citation_rejections?.length || 0})</summary>{snapshot.citation_rejections?.length ? <ul className="mt-4 space-y-3 text-sm">{snapshot.citation_rejections.map((item, index) => <li key={index}><strong>{item.claim_id}</strong> · {item.source_id || item.evidence_id || "Report"}<p className="mt-1 text-muted-foreground">{item.reason}</p></li>)}</ul> : <p className="mt-3 text-sm text-muted-foreground">No citations have been rejected in this session.</p>}</details>}
             </div>
           </div>}
         </div>
         <section className="no-print"><ResearchChat key={snapshot && researchId ? researchId : generalChatId} researchId={snapshot && researchId ? researchId : generalChatId} state={snapshot && researchId ? snapshot : null} findings={session.findings} evidence={session.evidence} sources={session.sources} onPreview={setPreview} embedded={activeTab === "assistant"} /></section>
-        {storageError && <p className="no-print mt-4 text-sm text-amber-700" role="alert">{storageError}</p>}
-        <footer className="mx-auto mt-12 max-w-3xl border-t border-slate-200 py-8 text-center dark:border-slate-800 no-print"><p className="text-xs text-slate-500">Session-scoped research. Saved reports stay in this browser only.</p></footer>
+        {storageError && <p className="no-print mt-4 text-sm text-warning" role="alert">{storageError}</p>}
+        <footer className="mx-auto mt-12 max-w-3xl border-t border-border py-8 text-center dark:border-border no-print"><p className="text-xs text-muted-foreground">Session-scoped research. Saved reports stay in this browser only.</p></footer>
       </main>
     </div>
-    {preview && <SourcePreview source={preview} evidence={session.evidence} onClose={() => setPreview(null)} />}
+    {preview && <SourcePreview source={preview} evidence={session.evidence} findings={session.findings} onClose={() => setPreview(null)} />}
   </div>;
 }

@@ -80,16 +80,16 @@ export function ResearchReport({ markdown, sources, onPreview, structured }: { m
     } catch { setCopyError("Clipboard access failed. Download the Markdown report instead."); }
   };
   return <section id="final-report" className="report-wrapper print-report" aria-label="Final research report">
-    <header className="report-toolbar no-print border-b border-slate-200 px-5 py-5 dark:border-slate-800">
-      <div className="flex flex-wrap items-baseline justify-between gap-3"><h2 className="text-lg font-semibold">Research report</h2><p className="text-xs text-slate-500">{report.sections.length} sections · {sources.length} retrieved sources</p></div>
+    <header className="report-toolbar no-print border-b border-border px-5 py-5 dark:border-border">
+      <div className="flex flex-wrap items-baseline justify-between gap-3"><h2 className="text-lg font-medium">Research report</h2><p className="text-xs text-muted-foreground">{report.sections.length} sections · {sources.length} retrieved sources</p></div>
       <div className="mt-3 flex flex-wrap gap-2">
-        <button className="button-secondary" onClick={copy}>{copied ? "Copied" : "Copy report"}</button>
-        <button className="button-secondary" onClick={download}>Export Markdown</button>
-        <button className="button-secondary" onClick={() => window.print()}>Print</button>
+        <button className="button-secondary" title="Copy the complete report" onClick={copy}>{copied ? "Copied" : "Copy report"}</button>
+        <button className="button-secondary" title="Download the report as Markdown" onClick={download}>Export Markdown</button>
+        <button className="button-secondary" title="Open the browser print dialog" onClick={() => window.print()}>Print</button>
         <button className="button-secondary" onClick={() => window.print()} title="Choose Save as PDF in your browser print dialog">Export PDF</button>
       </div>
-      <p className="mt-2 text-xs text-slate-500">PDF export uses your browser’s “Save as PDF” destination.</p>
-      {copyError && <p role="alert" className="mt-2 text-sm text-red-600">{copyError}</p>}
+      <p className="mt-2 text-xs text-muted-foreground">PDF export uses your browser’s “Save as PDF” destination.</p>
+      {copyError && <p role="alert" className="mt-2 text-sm text-destructive">{copyError}</p>}
       <div className="mt-4 flex flex-wrap items-center gap-2"><label htmlFor="report-search" className="sr-only">Search within report</label><input id="report-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search within report" className="select min-h-10 min-w-0 flex-1" /><span aria-live="polite" className="text-xs">{count ? active + 1 : 0} / {count}</span><button aria-label="Previous match" disabled={!count} className="button-secondary" onClick={() => setActive((active + count - 1) % count)}>Previous</button><button aria-label="Next match" disabled={!count} className="button-secondary" onClick={() => setActive((active + 1) % count)}>Next</button></div>
     </header>
     <div className="report-layout">

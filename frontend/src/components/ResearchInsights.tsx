@@ -8,5 +8,5 @@ export function ResearchInsights({ state, findings }: { state: ResearchState; fi
     ...(state.unresolved_questions || []).map((question) => ({ label: "Unresolved question", text: question })),
   ];
   if (!items.length) return null;
-  return <section className="card" aria-label="Research insights"><h2 className="section-title"><Lightbulb size={17} /> Research insights</h2><div className="mt-4 grid gap-2">{items.map((item, index) => <div key={`${item.label}-${index}`} className="border-l-2 border-indigo-300 pl-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-indigo-600">{item.label}</p><p className="mt-1 text-sm">{item.text}</p></div>)}</div></section>;
+  return <section className="card" aria-label="Research insights"><h2 className="section-title"><Lightbulb size={17} /> Research insights</h2><div className="mt-4 grid gap-2">{items.map((item, index) => <div key={`${item.label}-${index}`} className="border-l-2 border-border pl-3"><p className="text-[11px] font-medium uppercase tracking-wide text-link">{item.label}</p><p className="mt-1 text-sm">{item.text}</p></div>)}</div></section>;
 }
