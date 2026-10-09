@@ -1,3 +1,4 @@
+import { GoogleIcon } from "./GoogleIcon";
 import { useEffect, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { cloudEnabled, googleLogin, initializeAuth, signOut, supabase } from '../services/auth';
@@ -52,7 +53,7 @@ export function AccountPanel() {
   return <div className="mt-4 max-h-56 shrink-0 space-y-2 overflow-y-auto border-t border-border pt-3 text-xs break-words">
     <p className="font-medium">{session?.user.is_anonymous ? 'Guest workspace' : session?.user.email || 'Cloud workspace'}</p>
     {session?.user.is_anonymous ? <><p className="text-muted-foreground">{remaining === null ? 'Loading allowance…' : `${remaining} of 5 research runs remaining`}</p>
-      <button className="button-primary w-full" disabled={busy} onClick={() => void action(() => googleLogin())}>Continue with Google</button>
+      <button className="button-primary w-full google-login-button" aria-label="Continue with Google" disabled={busy} onClick={() => void action(() => googleLogin())}><GoogleIcon /><span className="google-login-text">Continue with Google</span></button>
       <button className="text-muted-foreground underline" disabled={busy} onClick={() => void action(loginExisting)}>Sign in to an existing account</button>
       <p className="text-muted-foreground">Continue links your guest workspace to a new Google account. For an existing account, use sign in.</p></>
       : session && <><p className="text-muted-foreground">Saved until you delete it.</p><button className="button-secondary w-full" disabled={busy} onClick={() => void action(importLocal)}>Import browser history</button><button className="button-secondary w-full" disabled={busy} onClick={() => void action(signOut)}>Sign out</button></>}

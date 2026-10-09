@@ -454,3 +454,16 @@ strong, b { font-weight: 500; }
 @keyframes pet-conflict { 0%, 100% { transform: rotate(0); } 20%, 60% { transform: rotate(-6deg); } 40%, 80% { transform: rotate(6deg); } }
 @keyframes pet-write { 0%, 100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(2px) rotate(2deg); } }
 @media (prefers-reduced-motion: reduce) { .research-companion[data-task] .research-pet-body, .research-companion[data-task] .research-pet-wing { animation: none; } }
+
+:root { --google-blue: 217 89% 61%; --google-green: 136 53% 43%; --google-yellow: 45 97% 50%; --google-red: 5 69% 54%; }
+.google-mark { width: 20px; height: 20px; flex-shrink: 0; }
+.google-login-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; min-width: 44px; }
+.theme-options { display: flex; gap: 4px; padding: 4px; border: 1px solid hsl(var(--border)); border-radius: 12px; }
+.theme-options button { display: flex; flex: 1; align-items: center; justify-content: center; gap: 5px; min-height: 44px; border-radius: 8px; font-size: 11px; color: hsl(var(--muted-foreground)); transition: transform 180ms ease-out; }
+.theme-options button[aria-pressed="true"] { background: hsl(var(--muted)); color: hsl(var(--foreground)); }
+.theme-options button:hover { transform: translateY(-1px); }
+.theme-mode-icon { animation: theme-icon-in 240ms ease-out; }
+@keyframes theme-icon-in { from { opacity: 0; transform: rotate(-35deg) scale(.75); } to { opacity: 1; transform: none; } }
+html.theme-changing body, html.theme-changing .card, html.theme-changing .sidebar, html.theme-changing .landing, html.theme-changing .landing-nav { transition: background-color 240ms ease-out, color 240ms ease-out, border-color 240ms ease-out; }
+@media (max-width: 640px) { .google-login-text { display: none; } }
+@media (prefers-reduced-motion: reduce) { .theme-mode-icon, .theme-options button { animation: none; transition: none; } html.theme-changing body, html.theme-changing .card, html.theme-changing .sidebar, html.theme-changing .landing, html.theme-changing .landing-nav { transition: none; } }
