@@ -113,7 +113,7 @@ SSE subscriptions independently replay retained events using `Last-Event-ID` or 
 
 During local development, browser requests use same-origin `/api` URLs and Vite proxies them to `VITE_BACKEND_URL` (default `http://127.0.0.1:8001`). Start FastAPI on port 8001 when using the local backend, and restart Vite after changing the port. `VITE_API_URL` applies to production builds only: set it to the public FastAPI backend URL, not the frontend website URL, when deploying separately.
 Set the backend's `CORS_ORIGINS` environment variable to the exact deployed frontend
-origin (for example, `https://research-ai-agent-4rpb-ruby.vercel.app`), using commas
+origin (for example, `https://findingsai.vercel.app`), using commas
 to separate multiple origins.
 
 ### Groq review model and free-plan limits

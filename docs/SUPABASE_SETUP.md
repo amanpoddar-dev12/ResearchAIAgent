@@ -52,3 +52,10 @@ All values must refer to the same project. Only URL/publishable key are browser-
 8. Remove a PDF, delete saved research, sign out, and verify the next guest cannot see the previous account's history.
 
 Official references: [Anonymous authentication](https://supabase.com/docs/guides/auth/auth-anonymous), [Google OAuth](https://supabase.com/docs/guides/auth/social-login/auth-google), [RLS](https://supabase.com/docs/guides/database/postgres/row-level-security), [Storage access](https://supabase.com/docs/guides/storage/security/access-control).
+
+
+### FindingsAI production domain
+
+The production frontend is `https://findingsai.vercel.app`. In Supabase Authentication → URL Configuration, set Site URL to `https://findingsai.vercel.app/` and add that exact URL to Redirect URLs alongside the existing localhost development redirects. Google sign-in returns to the frontend root, where persisted signed-in sessions open the research workspace. An unapproved redirect can fall back to the Site URL, so a stale Site URL can send login to a retired deployment.
+
+If the deployed backend explicitly sets `CORS_ORIGINS`, include `https://findingsai.vercel.app` in that setting; an explicit environment value overrides the code defaults.

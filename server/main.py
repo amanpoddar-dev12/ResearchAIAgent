@@ -200,7 +200,7 @@ origins = [
     origin.strip()
     for origin in os.getenv(
         "CORS_ORIGINS",
-        "http://localhost:5173,http://localhost:5174,https://research-ai-agent-4rpb-ruby.vercel.app",
+        "http://localhost:5173,http://localhost:5174,https://research-ai-agent-4rpb-ruby.vercel.app,https://findingsai.vercel.app",
     ).split(",")
     if origin.strip()
 ]
