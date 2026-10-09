@@ -40,3 +40,10 @@ During `npm run dev`, fetch and SSE requests use same-origin `/api` URLs through
 `VITE_API_URL` is used only in production builds; it must point to the FastAPI backend, not the frontend website. Production builds retain `VITE_BACKEND_URL` as a fallback when `VITE_API_URL` is unset. A separately hosted backend must allow the deployed frontend origin through `CORS_ORIGINS`.
 
 API routing regression tests (no additional dependencies): `node --test tests/api.test.mjs` from this directory.
+
+
+### Vercel page routes
+
+Deploy the frontend with Vercel Root Directory set to `frontend`, build command `npm run build`, and output directory `dist`. The `frontend/vercel.json` configuration serves the React entry document for `/app` and `/landing`, including trailing-slash URLs. This allows direct navigation and refresh without a hosting 404. API and asset URLs are not rewritten.
+
+After deploying this configuration, verify `/`, `/app`, and `/landing` in the deployed site. Signed-in visits to `/` open the research workspace; signed-out visits show the landing page. `/app` retains guest access.
