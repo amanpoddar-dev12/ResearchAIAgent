@@ -379,3 +379,78 @@ strong, b { font-weight: 500; }
   .chat-tools { padding-top: 0; padding-bottom: 0; margin-top: 8px; }
   .chat-tools[open] { max-height: max(60px, calc(var(--chat-viewport-height, 100dvh) - 220px)); }
 }
+
+/* Outcome-first reading and a compact assistant workspace. */
+.sidebar-footer[open] { max-height: 40dvh; overflow-y: auto; }
+.research-diagnostics > summary { background: hsl(var(--card)); }
+.research-input .chip { max-width: 100%; white-space: normal; text-align: left; }
+.chat-context[open] { max-height: 140px; overflow-y: auto; }
+@media (max-width: 767px) {
+  .assistant-workspace { padding: 12px 16px; }
+  .assistant-workspace > div:first-child { display: none; }
+  .assistant-workspace footer { display: none; }
+  .assistant-workspace #research-chat-panel:not(.chat-panel) { height: calc(100dvh - 90px); max-height: calc(100dvh - 90px); }
+  .chat-header h2 { font-size: 17px !important; line-height: 1.2; }
+  .chat-header { align-items: center; }
+  .chat-header > div:first-child > p { display: none; }
+  #research-chat-panel .chat-messages { padding-top: 8px; padding-bottom: 8px; }
+  #research-chat-panel .chip { font-size: 12px; padding: 8px; }
+  .chat-keyboard-open .chat-context { display: none; }
+  .sidebar .icon-button { min-width: 44px; min-height: 44px; }
+}
+@media print {
+  .report-reading-notes { display: block !important; }
+  .report-reading-notes > summary { display: none; }
+  .report-reading-notes > :not(summary) { display: block !important; }
+}
+
+/* Original bookish owl companion; decorative motion during live research only. */
+.research-pet-body { transform-origin: 32px 54px; animation: pet-sway 2.4s ease-in-out infinite; }
+.research-pet[data-action="1"] .research-pet-body { animation-name: pet-hop; }
+.research-pet[data-action="2"] .research-pet-body { animation-name: pet-peek; }
+.research-pet-wing { transform-origin: 18px 34px; animation: pet-wave 3s ease-in-out infinite; }
+.research-pet-eyes { transform-origin: 32px 29px; animation: pet-blink 5.5s linear infinite; }
+.research-pet-dots { animation: pet-dots 1.6s ease-in-out infinite; }
+@keyframes pet-sway { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(4deg); } }
+@keyframes pet-hop { 0%, 60%, 100% { transform: translateY(0); } 30% { transform: translateY(-5px) rotate(3deg); } }
+@keyframes pet-peek { 0%, 100% { transform: rotate(0); } 35%, 65% { transform: rotate(-7deg); } }
+@keyframes pet-wave { 0%, 60%, 100% { transform: rotate(0); } 25%, 45% { transform: rotate(22deg); } 35% { transform: rotate(-10deg); } }
+@keyframes pet-blink { 0%, 42%, 46%, 100% { transform: scaleY(1); } 44% { transform: scaleY(.1); } }
+@keyframes pet-dots { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .research-companion *, .research-companion *::before, .research-companion *::after { animation: none !important; }
+}
+
+.research-pet-playground { position: relative; height: 70px; overflow: hidden; }
+.research-pet-playground .research-pet { position: absolute; top: 7px; left: 0; animation: pet-wander 16s ease-in-out infinite; pointer-events: none; }
+.research-companion { flex-shrink: 0; pointer-events: none; }
+@keyframes pet-wander {
+  0%, 100% { left: 0; transform: translateY(0); }
+  25% { left: calc(50% - 28px); transform: translateY(-5px); }
+  50% { left: calc(100% - 56px); transform: translateY(3px); }
+  75% { left: calc(40% - 22px); transform: translateY(-3px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .research-pet-playground .research-pet { animation: none; left: calc(50% - 28px); }
+}
+
+/* Perch directly above the composer, with no separate card or reserved play area. */
+.research-companion-compact .research-pet-playground { width: 44px; height: 42px; flex-shrink: 0; overflow: visible; order: 2; }
+.research-companion-compact .research-pet-playground .research-pet { width: 40px; height: 40px; top: 0; left: 0; animation: pet-perch 8s ease-in-out infinite; }
+.research-companion-compact p { font-size: 12px; font-weight: 400; color: hsl(var(--muted-foreground)); }
+@keyframes pet-perch { 0%, 100% { transform: translateX(0); } 35% { transform: translateX(-5px); } 70% { transform: translateX(3px); } }
+@media (prefers-reduced-motion: reduce) { .research-companion-compact .research-pet-playground .research-pet { animation: none; } }
+
+/* Task-specific gestures follow the research stream rather than a random timer. */
+.research-companion[data-task="planning"] .research-pet-body { animation-name: pet-peek; }
+.research-companion[data-task="search"] .research-pet-body { animation: pet-search 1.8s ease-in-out infinite; }
+.research-companion[data-task="evidence"] .research-pet-body { animation: pet-investigate 2.2s ease-in-out infinite; }
+.research-companion[data-task="finding"] .research-pet-body { animation: pet-hop 1.4s ease-in-out infinite; }
+.research-companion[data-task="conflicts"] .research-pet-body { animation: pet-conflict 2s ease-in-out infinite; }
+.research-companion[data-task="synthesis"] .research-pet-body { animation: pet-write 1.7s ease-in-out infinite; }
+.research-companion[data-task="synthesis"] .research-pet-wing { animation-duration: .9s; }
+@keyframes pet-search { 0%, 100% { transform: translateX(-4px) rotate(-5deg); } 50% { transform: translateX(4px) rotate(5deg); } }
+@keyframes pet-investigate { 0%, 100% { transform: rotate(0); } 45%, 65% { transform: translateY(2px) rotate(-9deg); } }
+@keyframes pet-conflict { 0%, 100% { transform: rotate(0); } 20%, 60% { transform: rotate(-6deg); } 40%, 80% { transform: rotate(6deg); } }
+@keyframes pet-write { 0%, 100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(2px) rotate(2deg); } }
+@media (prefers-reduced-motion: reduce) { .research-companion[data-task] .research-pet-body, .research-companion[data-task] .research-pet-wing { animation: none; } }

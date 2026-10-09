@@ -15,7 +15,7 @@ from app.llm import LLMRequestBudgetExceeded, LLMRouter
 from app.models import (ClaimExtraction, Evidence, EvidenceAssessment, EvidenceAssessmentBatch,
                         Finding, ReportBlock, ReportBlockReview, ReportBlockReviews,
                         ReportDraft, ResearchPlan, QuestionAnalysis, GapAssessment,
-                        Source, SubQuestion, DataPoint)
+                        Source, SubQuestion, DataPoint, DataPointExtraction)
 from app.synthesizer import SECTION_TITLES, build_structured_report
 from app.researcher import Researcher
 from app.models import SourceFilters, SearchResult
@@ -54,6 +54,10 @@ def test_real_router_pipeline_schemas_budgets_and_reports(monkeypatch, mode):
                     excerpt="Test widget Alpha has a test speed of 10 units.")], data_points=[
                     DataPoint(source_id=source_id, label="Test speed", value=10, unit="units", observation="2024", quote="In 2024, test speed was 10 units."),
                     DataPoint(source_id=source_id, label="Test speed", value=12, unit="units", observation="2025", quote="In 2025, test speed was 12 units.")])
+        elif task == 'data_extraction':
+            result = DataPointExtraction(data_points=[
+                DataPoint(source_id='S1', label='Test speed', value=10, unit='units', observation='2024', quote='In 2024, test speed was 10 units.'),
+                DataPoint(source_id='S1', label='Test speed', value=12, unit='units', observation='2025', quote='In 2025, test speed was 12 units.')])
         elif task in {"evidence_evaluation", "independent_review"}:
             result = EvidenceAssessmentBatch(assessments=[EvidenceAssessment(claim_id="C1", evidence_id="E1",
                 relation="supports", strength="direct", reasoning="Synthetic passage states this measurement.")])
@@ -80,6 +84,7 @@ def test_real_router_pipeline_schemas_budgets_and_reports(monkeypatch, mode):
     assert state.findings[0].evidence_status == "Supported"
     assert state.extraction_completed == ["S1"]
     assert tasks.count("evidence_extraction") == 1
+    assert tasks.count('data_extraction') == 1
     assert 0 < state.llm_requests_used <= 10
     assert sum(item["attempts"] for item in state.llm_usage.values()) == state.llm_requests_used
     assert [section.id for section in state.structured_report.sections] == [key for key, _ in SECTION_TITLES]

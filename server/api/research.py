@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ResearchJob:
+    parent_state: ResearchState | None = None
+    owner_id: str | None = None
     queue: asyncio.Queue[dict[str, Any]] = field(default_factory=asyncio.Queue)
     events: list[dict[str, Any]] = field(default_factory=list)
     changed: asyncio.Event = field(default_factory=asyncio.Event)
@@ -52,6 +54,7 @@ MAX_ACTIVE_JOBS = 3
 MAX_RETAINED_JOBS = 20
 RETENTION_SECONDS = 1800
 MAX_EVENTS = 1024
+_start_lock = asyncio.Lock()
 
 
 def cleanup_jobs():
@@ -83,12 +86,43 @@ def _public_state(state: ResearchState) -> dict[str, Any]:
     return state.model_dump(mode="json", exclude={"sources": {"__all__": {"content"}}})
 
 
-async def start_research(request: ResearchRequest) -> str:
+async def start_research(request: ResearchRequest, user: dict | None = None) -> str:
+    # ponytail: process-wide lock across reservations; distributed execution needs a job queue.
+    async with _start_lock:
+        return await _start_research(request, user)
+
+
+async def _start_research(request: ResearchRequest, user: dict | None = None) -> str:
     cleanup_jobs()
     if sum(not job.done for job in jobs.values()) >= MAX_ACTIVE_JOBS:
         raise RuntimeError("Research capacity reached. Wait for an active session to finish.")
     research_id = uuid4().hex
-    jobs[research_id] = ResearchJob()
+    parent_state = None
+    if request.parent_research_id:
+        from fastapi import HTTPException
+        if user:
+            from server.workspace import load
+            parent = await load(user['id'], 'research', request.parent_research_id)
+            if parent and parent.get('status') == 'complete' and parent.get('state'):
+                parent_state = ResearchState.model_validate(parent['state'])
+        else:
+            parent_job = jobs.get(request.parent_research_id)
+            if parent_job and parent_job.done and parent_job.owner_id is None and not parent_job.error:
+                parent_state = parent_job.state
+        if parent_state is None:
+            raise HTTPException(404, 'Completed parent research not found in your workspace.')
+    if user:
+        from server.workspace import reserve, save
+        await reserve(user, research_id)
+        try:
+            await save(user['id'], 'research', research_id, {'id': research_id, 'question': request.question,
+                'mode': request.mode or request.depth, 'report': '', 'sources': [], 'status': 'running',
+                'savedAt': datetime.now(timezone.utc).isoformat()})
+        except Exception:
+            from server.workspace import refund
+            await refund(user['id'], research_id)
+            raise
+    jobs[research_id] = ResearchJob(owner_id=user['id'] if user else None, parent_state=parent_state)
     jobs[research_id].task = asyncio.create_task(_run_job(research_id, request))
     return research_id
 
@@ -98,6 +132,22 @@ async def _run_job(research_id: str, request: ResearchRequest) -> None:
     loop = asyncio.get_running_loop()
     job.mode = request.mode or request.depth
     job.rag_index = SessionIndex(request.question, job.mode)
+    async def checkpoint():
+        # Persist bounded snapshots, never every streamed event/token.
+        from server.workspace import save
+        while True:
+            await asyncio.sleep(5)
+            if job.owner_id and job.latest_snapshot:
+                snapshot = {**job.latest_snapshot, 'sources': [{**source,
+                    'content': job.rag_index.source_text.get(source['id'], source.get('content', ''))}
+                    for source in job.latest_snapshot.get('sources', [])]}
+                try:
+                    await save(job.owner_id, 'research', research_id, {'id': research_id, 'question': request.question,
+                        'mode': job.mode, 'report': '', 'state': snapshot, 'sources': snapshot.get('sources', []),
+                        'status': 'running', 'savedAt': datetime.now(timezone.utc).isoformat()})
+                except Exception:
+                    logger.warning('Cloud checkpoint unavailable for %s', research_id)
+    checkpoint_task = asyncio.create_task(checkpoint()) if job.owner_id else None
 
     def enqueue(event_type: str, message: str, data: Any = None) -> None:
         if job.done:
@@ -137,11 +187,11 @@ async def _run_job(research_id: str, request: ResearchRequest) -> None:
         settings.max_sources = min(settings.max_sources, request.budgets.max_sources or min(request.max_sources, config.sources))
         agent = ResearchAgent(settings)
         job.agent = agent
+        continuation = {'parent_state': job.parent_state, 'parent_research_id': request.parent_research_id} if job.parent_state else {}
         state = await asyncio.to_thread(agent.run, request.question, emit, mode=job.mode, filters=request.filters,
-            target_claims=request.target_claims, comparison_items=request.comparison_items, budgets=request.budgets)
+            target_claims=request.target_claims, comparison_items=request.comparison_items, budgets=request.budgets, **continuation)
         job.state = state
         job.rag_index.update("research_snapshot", state)
-        enqueue("complete", "Research completed", {"state": _public_state(state), "report": state.final_report})
     except asyncio.CancelledError:
         job.error = "Research cancelled"
         if job.agent and hasattr(job.agent.llm, "cancelled"):
@@ -152,6 +202,31 @@ async def _run_job(research_id: str, request: ResearchRequest) -> None:
         job.error = "The research service could not complete this request."
         enqueue("research_failed", "Research failed", {"error": job.error})
     finally:
+        if checkpoint_task:
+            checkpoint_task.cancel()
+            await asyncio.gather(checkpoint_task, return_exceptions=True)
+        if job.owner_id:
+            from server.workspace import save, refund
+            try:
+                full = job.state.model_dump(mode='json') if job.state else job.latest_snapshot
+                if full:
+                    full = {**full, 'sources': [{**source, 'content': job.rag_index.source_text.get(source['id'], source.get('content', ''))}
+                        for source in full.get('sources', [])]}
+                await save(job.owner_id, 'research', research_id, {'id': research_id, 'question': request.question,
+                    'mode': job.mode, 'report': job.state.final_report if job.state else '', 'state': full,
+                    'sources': full.get('sources', []) if full else [], 'status': 'failed' if job.error else 'complete',
+                    'savedAt': datetime.now(timezone.utc).isoformat(), 'error': job.error})
+            except Exception:
+                logger.error('Could not persist research %s; its in-memory result remains available', research_id)
+                enqueue('cloud_save_failed', 'Cloud save failed. Export this research or retry saving before leaving.')
+            if job.error and not job.cancel_requested:
+                try:
+                    await refund(job.owner_id, research_id)
+                except Exception:
+                    logger.error('Guest allowance refund needs retry for research %s', research_id)
+                    enqueue('cloud_save_failed', 'The failed run could not be refunded because cloud storage is unavailable. Contact support with this research ID.')
+        if job.state and not job.error:
+            enqueue("complete", "Research completed", {"state": _public_state(job.state), "report": job.state.final_report})
         job.done = True
         job.finished_at = time.monotonic()
         job.changed.set()
@@ -208,6 +283,8 @@ def get_public_state(research_id: str) -> dict[str, Any] | None:
     job = jobs.get(research_id)
     if not job or not job.state:
         return None
+    if job.owner_id and not job.done:
+        return None  # Do not race research_completed against the final cloud save.
     return _public_state(job.state)
 
 

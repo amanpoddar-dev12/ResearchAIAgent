@@ -5,6 +5,7 @@ from app.modes import ModeName
 
 
 class ResearchRequest(BaseModel):
+    parent_research_id: str | None = Field(default=None, min_length=1, max_length=150, pattern=r'^[A-Za-z0-9_-]+$')
     question: str = Field(min_length=3)
     depth: Literal["quick", "standard", "deep"] = "standard"
     max_sources: int = Field(default=10, ge=1, le=20)

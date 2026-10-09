@@ -1,7 +1,7 @@
 """Evidence and claim extraction."""
 
 import logging
-from concurrent.futures import ThreadPoolExecutor
+import re
 from app.llm import LLMClient, invoke_structured
 from app.llm.routing import CLAIM_EXTRACTION, DATA_EXTRACTION, EVIDENCE_EXTRACTION, SOURCE_EXTRACTION, SOURCE_SUMMARY
 from app.models import ClaimExtraction, DataPoint, DataPointExtraction, Evidence, Finding, Source, ResearchState, SourceSummary
@@ -27,6 +27,25 @@ class Extractor:
 
     def extract_many(self, question: str, sources: list[Source]) -> list[Finding]:
         return self.extract_evidence(question, sources).findings
+
+    def extract_quantitative(self, question: str, sources: list[Source]) -> DataPointExtraction:
+        """One bounded model call; the coordinator validates and commits returned values."""
+        selected = [source for source in sources if re.search(r'\d', source.content)][:4]
+        if not selected:
+            return DataPointExtraction()
+        text = '\n\n'.join(f'--- {source.id} | {source.title} ---\n{source.content[:5000]}' for source in selected)
+        try:
+            result = invoke_structured(self.llm, DATA_POINT_EXTRACTION.format(
+                question=question, source_id=', '.join(source.id for source in selected), content=text)
+                + '\nExtract at most 20 relevant observations across these sources. Use only supplied source IDs. '
+                  'Keep each metric label and unit consistent and preserve population, geography, measurement period and definition. '
+                  'Do not combine different studies or treat publication years as observation years. '
+                  'Return an empty data_points array when useful measurements are absent.', DataPointExtraction, task=DATA_EXTRACTION)
+            allowed = {source.id for source in selected}
+            return DataPointExtraction(data_points=[point for point in result.data_points if point.source_id in allowed][:20])
+        except (RuntimeError, ValueError, TypeError, TimeoutError):
+            logger.warning('Dedicated numerical extraction unavailable; continuing with collected evidence')
+            return DataPointExtraction()
 
     def extract_evidence(self, question: str, sources: list[Source], strategy: str = "") -> ClaimExtraction:
         if not sources:
@@ -87,30 +106,5 @@ class Extractor:
     def extract_data_points(self, question: str, sources: list[Source], state: ResearchState) -> None:
         if not sources or not getattr(self.llm, "supports_task_routing", False):
             return
-
-        def extract_one(source: Source) -> DataPointExtraction:
-            try:
-                return invoke_structured(
-                    self.llm,
-                    DATA_POINT_EXTRACTION.format(question=question, source_id=source.id, content=source.content[:30_000]),
-                    DataPointExtraction,
-                    task=DATA_EXTRACTION,
-                )
-            except (RuntimeError, TypeError, ValueError) as exc:
-                logger.warning("Data-point extraction failed for %s: %s", source.url, type(exc).__name__)
-                return DataPointExtraction()
-
-        with ThreadPoolExecutor(max_workers=min(3, len(sources))) as executor:
-            batches = list(executor.map(extract_one, sources))
-        for batch in batches:
-            for point in batch.data_points:
-                source = next((item for item in sources if item.id == point.source_id), None)
-                if not source or not point.quote or point.quote not in source.content:
-                    continue
-                point.id = point.id or f"DP{len(state.data_points) + 1}"
-                state.data_points.append(point)
-                if not any(item.source_id == point.source_id and item.excerpt == point.quote for item in state.evidence):
-                    state.evidence.append(Evidence(
-                        id=f"{point.id}-evidence", source_id=point.source_id, excerpt=point.quote,
-                        relation="context", strength="direct",
-                    ))
+        result = self.extract_quantitative(question, sources)
+        merge_extraction(state, ClaimExtraction(data_points=result.data_points))

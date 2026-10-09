@@ -1,7 +1,7 @@
 import { SessionIndex, standaloneQuery } from "./retrieval";
 import type { HistoryMessage, SessionDocument } from "./retrieval";
 export interface PDFPage { page: number; text: string }
-export interface PDFDocument { id: string; name: string; page_count: number; pages: PDFPage[]; warnings: string[] }
+export interface PDFDocument { id: string; name: string; page_count: number; pages: PDFPage[]; warnings: string[]; storage_path?: string }
 export interface PDFChunk { page: number; text: string }
 export interface PDFContext { document_id: string; name: string; page_count: number; chunks: PDFChunk[] }
 export function pdfIndex(pdf: PDFDocument): SessionIndex {

@@ -20,6 +20,7 @@ from app.models import (
 from app.prompts import CONFLICT_DETECTION, SYNTHESIS
 from app.modes import MODES
 from app.evidence import reject, source_rejection, linked_evidence
+from app.source_quality import independent_source_count
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +148,7 @@ def _cell_occurs(value, quote: str) -> bool:
         from decimal import Decimal, InvalidOperation
         if not math.isfinite(value):
             return False
-        for token in re.findall(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?(?![\w.])", quote):
+        for token in re.findall(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?(?!\w|\.\d)", quote):
             try:
                 if Decimal(token.replace(",", "")) == Decimal(str(value)):
                     return True
@@ -163,7 +164,7 @@ def _metric_matches(value, label: str, row_label, quote: str) -> bool:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return True
     numeric = []
-    for match in re.finditer(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?(?![\w.])", quote):
+    for match in re.finditer(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?(?!\w|\.\d)", quote):
         try:
             number = Decimal(match.group().replace(",", ""))
             if str(row_label).isdigit() and number == Decimal(str(row_label)):
@@ -229,7 +230,7 @@ def _validated_visual(spec, state: ResearchState, evidence, section_ids: set[str
             if is_chart and spec.type == "pie" and key != spec.x_key and value < 0:
                 break
             # Explicit estimates remain estimates even if the model forgets the flag.
-            is_estimated = record.estimated or bool(re.search(r"\bestimat(?:e|ed|ion)\b|\bapproximately\b|\babout\s+\d", record.quote, re.IGNORECASE))
+            is_estimated = record.estimated or bool(re.search(r"\bestimat(?:e[sd]?|ion|ing)\b|\bapproximately\b|\babout\s+\d", record.quote, re.IGNORECASE))
             cell_records.append(record.model_copy(update={"row": len(valid_rows), "estimated": is_estimated}))
         if len(cell_records) != len(keys):
             reject(state, "report", "Visual row omitted: displayed value lacks matching retrieved evidence", evidence_id=f"{spec.id}:{row_index}")
@@ -276,15 +277,23 @@ def _report_visuals(draft: ReportDraft, state: ResearchState, evidence):
         validated = _validated_visual(spec, state, evidence, {key for key, _ in SECTION_TITLES})
         if validated:
             (charts if isinstance(validated, ChartSpec) else tables).append(validated)
-    grouped: dict[str, list[DataPoint]] = {}
+    grouped: dict[tuple[str, str, str], list[DataPoint]] = {}
     for point in state.data_points:
         if any(item.source_id == point.source_id and point.quote in item.excerpt for item in evidence.values()):
-            grouped.setdefault(f"{point.label}|{point.unit}", []).append(point)
+            grouped.setdefault((point.label, point.unit, point.source_id), []).append(point)
     for group, points in grouped.items():
         observations = list(dict.fromkeys(point.observation for point in points))
-        if len(observations) < 2:
+        if not observations:
             continue
-        label, unit = group.split("|", 1)
+        label, unit, source_id = group
+        ambiguous = {observation for observation in observations if len({point.value for point in points if point.observation == observation}) > 1}
+        if ambiguous:
+            reject(state, 'data', 'Conflicting values for the same source, metric and observation were omitted', source_id)
+        unique_points = {}
+        for point in points:
+            if point.observation not in ambiguous:
+                unique_points.setdefault(point.observation, point)
+        points = list(unique_points.values())
         ordered = sorted(points, key=lambda point: (not point.observation.isdigit(), int(point.observation) if point.observation.isdigit() else point.observation))
         provenance = []
         rows = []
@@ -298,14 +307,14 @@ def _report_visuals(draft: ReportDraft, state: ResearchState, evidence):
                 VisualProvenance(row=row_index, key="observation", evidence_id=evidence_item.id, quote=point.quote, estimated=point.estimated),
                 VisualProvenance(row=row_index, key="value", evidence_id=evidence_item.id, quote=point.quote, estimated=point.estimated),
             ])
-        if len(rows) < 2:
+        if not rows:
             continue
-        is_timeline = all(isinstance(row["observation"], int) and 1000 <= row["observation"] <= 9999 for row in rows)
+        is_timeline = len(rows) >= 2 and all(isinstance(row["observation"], int) and 1000 <= row["observation"] <= 9999 for row in rows)
         generated = ChartSpec(
-            id=f"extracted-{re.sub(r'[^a-z0-9]+', '-', group.casefold()).strip('-')}",
+            id=f"extracted-{source_id}-{re.sub(r'[^a-z0-9]+', '-', (label + '-' + unit).casefold()).strip('-')}",
             type="line" if is_timeline else "bar",
             title=("Year-by-year " if is_timeline else "") + label + (f" ({unit})" if unit else ""),
-            caption="Source-backed observations extracted in parallel from relevant retrieved sources; missing observations are omitted.",
+            caption="Source-backed observations from one retrieved source; missing observations are omitted. Separate sources are not assumed comparable.",
             x_key="observation", series=[{"key": "value", "label": label + (f" ({unit})" if unit else "")}],
             data=rows, source_ids=list(dict.fromkeys(point.source_id for point in ordered)),
             provenance=provenance, origin="retrieved", section_id="timeline" if is_timeline else "comparison",
@@ -314,13 +323,15 @@ def _report_visuals(draft: ReportDraft, state: ResearchState, evidence):
         if validated and validated.id not in seen:
             seen.add(validated.id)
             charts.append(validated)
-    # A verified timeline chart supplies its exact table; no new data is inferred.
-    for chart in [chart for chart in charts if chart.section_id == "timeline"]:
-        if any(table.section_id == "timeline" for table in tables):
-            break
+            if sum(chart.origin == 'retrieved' for chart in charts) >= 4:
+                break
+    # Every retrieved chart supplies its exact table; no new values are inferred.
+    for chart in [chart for chart in charts if chart.origin == 'retrieved']:
+        if any(table.id == chart.id + '-table' for table in tables):
+            continue
         tables.append(TableSpec(id=chart.id + "-table", title=chart.title + " — data table", caption=chart.caption,
             columns=[chart.x_key] + [series.key for series in chart.series], rows=chart.data,
-            source_ids=chart.source_ids, provenance=chart.provenance, section_id="timeline"))
+            source_ids=chart.source_ids, provenance=chart.provenance, section_id=chart.section_id))
     quality_sources = [source for source in state.sources if source.quality]
     if quality_sources:
         charts.append(ChartSpec(id="source-quality-breakdown", type="bar", title="Source quality indicators",
@@ -360,13 +371,18 @@ def build_structured_report(draft: ReportDraft, state: ResearchState) -> Structu
     def safe_label(text):
         return re.sub(r"https?://[^\s<>]+", "[URL omitted]", text).replace("\n", " ")
     verified_points = [f"- {claim_text(finding)} **{finding.evidence_status}.**" for finding in supported[:8]]
-    summary = "\n".join(verified_points) or "No traceable supporting findings were established. The research question remains Unverified."
-    if len(verified_points) < 5:
-        summary += f"\n\nOnly {len(verified_points)} traceable supporting finding(s) were available; additional conclusions are not inferred to meet a bullet-count target."
+    direct = [finding for finding in supported if finding.evidence_status == "Supported"]
+    answer = claim_text(direct[0]) if direct else "The available evidence does not establish a supported answer to the research question."
+    summary = answer + "\n\n### Key findings\n\n" + ("\n".join(verified_points) or "No traceable supporting findings were established. The research question remains Unverified.")
+    unknown = list(dict.fromkeys(state.unresolved_questions + state.gaps))
+    if unknown:
+        summary += "\n\n### What remains unknown\n\n" + "\n".join(f"- {safe_label(item)}" for item in unknown[:5])
+    summary += "\n\nEvidence is limited to this session's retrieved sources; unresolved claims are not established conclusions."
     abstract = (f"This report examines the question: {safe_label(state.question.question)}. It presents an evidence-bounded synthesis of the current research session, "
         f"drawing on {len(sources)} source(s) with traceable excerpts and {len(findings)} linked claim record(s). Findings are distinguished by their support status, and unresolved questions are retained explicitly.")
     if supported:
         abstract += "\n\n" + " ".join(claim_text(finding) for finding in supported[:3])
+    abstract = answer + "\n\n" + abstract
     abstract += "\n\nThe review is limited to the retrieved material; it does not establish exhaustive coverage, causal effects, or consensus beyond that evidence."
     questions = state.plan.sub_questions if state.plan and state.plan.sub_questions else [state.question.refined_question or state.question.question]
     introduction = "The purpose of this review is to assemble and critically examine the evidence relevant to the following research questions. They define the scope of inquiry and are not treated as established findings.\n\n" + "\n".join(f"- {safe_label(question)}" for question in questions)
@@ -384,8 +400,11 @@ def build_structured_report(draft: ReportDraft, state: ResearchState) -> Structu
         "Claims were linked to evidence identifiers and source identifiers. Each retained excerpt was checked against the collected source text; nonexistent, irrelevant, untraceable and unsupported citations were excluded. "
         "Support, contradiction and uncertainty remain distinct. Dependency checks prevent a claim from receiving stronger support than its prerequisite evidence permits. "
         "Model assessments and heuristic scores require human interpretation; they do not constitute independent replication.\n\n"
+        "Different domains are not necessarily independent studies. Sources sharing a DOI reference are conservatively grouped; absence of a shared identifier does not prove independence. Original studies and documentation receive a small retrieval preference, subject to relevance and explicit filters.\n\n"
         "Quantitative visuals include only values with verbatim evidence for their displayed cells. Missing observations are omitted rather than interpolated. "
         "Charts marked as session diagnostics describe the research process and are not measurements reported by the sources.")
+    if state.parent_research_id:
+        methodology += f"\n\n### Changes from the previous report\n\nParent research: {safe_label(state.parent_research_id)}. This is a separate investigation; previous material informed planning but was not automatically promoted to verified evidence.\n\n" + "\n".join("- " + safe_label(change) for change in state.version_changes)
     queries = list(dict.fromkeys(source.search_query for source in state.sources if source.search_query))
     if queries:
         methodology += "\n\nSearch queries represented in retained sources:\n" + "\n".join(f"- {safe_label(query)}" for query in queries)
@@ -419,6 +438,16 @@ def build_structured_report(draft: ReportDraft, state: ResearchState) -> Structu
     comparison = ("The comparison uses the explicitly cited observations shown below. Differences should be interpreted only within the definitions and conditions stated by those sources; common units do not by themselves establish comparable methods."
         if any(item.section_id == "comparison" and item.origin == "retrieved" for item in [*charts, *tables])
         else "The current evidence does not establish a quantitatively comparable dataset. No numerical ranking or comparison is inferred from incompatible or absent measurements.")
+    numerical = []
+    for chart in charts:
+        if chart.origin != 'retrieved':
+            continue
+        for row_index, row in enumerate(chart.data[:3]):
+            ids = [evidence[record.evidence_id].source_id for record in chart.provenance if record.row == row_index and record.evidence_id in evidence]
+            estimated = ' (source-reported estimate)' if any(record.estimated for record in chart.provenance if record.row == row_index) else ''
+            for series in chart.series:
+                numerical.append(f"- {safe_label(series.label)}: **{row[series.key]}** for {safe_label(str(row[chart.x_key]))}{estimated}. {refs(ids)}")
+    comparison += "\n\n### Source-backed numbers\n\n" + ('\n'.join(numerical[:8]) if numerical else 'No traceable topic-related numerical observations were established. Numbers and charts are not invented to fill this section.')
     if state.mode == "compare" and state.question.comparison_items:
         def cell(value):
             return value.replace("|", "\\|").replace("\n", " ")
@@ -429,9 +458,10 @@ def build_structured_report(draft: ReportDraft, state: ResearchState) -> Structu
             values = []
             for item in items:
                 matches = [finding for finding in findings if finding.comparison_item == item and finding.comparison_criterion == criterion]
-                values.append("; ".join(cell(claim_text(finding) + f" ({finding.evidence_status})") for finding in matches) or "Unverified — no linked evidence")
+                values.append("; ".join(cell(claim_text(finding) + f" ({finding.evidence_status}; {independent_source_count([sources[sid] for sid in finding.source_ids if sid in sources])} source-origin group(s), heuristic)") for finding in matches) or "Unverified — no linked evidence")
             comparison += "\n| " + cell(criterion) + " | " + " | ".join(values) + " |"
         comparison = "### Claim-level comparison\n\n" + comparison
+        comparison += "\n\n### Comparison limits\n\nAn empty cell means missing evidence, not worse performance. Claim status and source-origin groups describe the evidence trail, not a product ranking. A fair comparison requires matched measurement periods, populations, methods and units; where these are absent, no winner is inferred."
     discussion = "### Implications\n\nThe evidence should be interpreted at the scope of each cited claim. Supporting excerpts establish traceability; they do not alone resolve study quality, selection effects, or transferability to settings not examined by the sources.\n\n### Conflicting evidence\n\n"
     conflict_items = []
     for conflict in state.conflicts:
@@ -439,7 +469,11 @@ def build_structured_report(draft: ReportDraft, state: ResearchState) -> Structu
         if not linked:
             linked = [item for item in evidence.values() if item.source_id in conflict.source_a + conflict.source_b]
         if linked:
-            conflict_items.append("The session identified an unresolved disagreement in the following evidence:\n\n" + "\n\n".join("> " + item.excerpt.replace("\n", " ") + " " + refs([item.source_id]) for item in linked))
+            passages = []
+            for item in linked:
+                source = sources[item.source_id]
+                passages.append(f"**{item.relation.capitalize()} evidence — {safe_label(source.title)}** {refs([item.source_id])}\n\n> " + item.excerpt.replace("\n", " ") + " " + refs([item.source_id]) + f"\n\nPublication date: {safe_label(source.publication_date or 'not reported')}. Publication dates are not measurement periods.")
+            conflict_items.append("The session identified an unresolved disagreement in the following evidence:\n\n" + "\n\n".join(passages) + "\n\n**Why the disagreement remains unresolved:** these passages alone do not establish whether differences in methods, populations, definitions or measurement periods explain the result. Those details must be checked before treating the findings as directly comparable; no resolution is assumed.")
     discussion += "\n\n".join(conflict_items) or "No traceable conflict was identified in the session; this absence does not establish consensus."
     discussion += "\n\n### Limitations\n\nCoverage is bounded by the selected mode, filters, budgets and material retrieved during this session. Single-source findings and incomplete evidence must not be generalized beyond their documented scope."
     limits = list(dict.fromkeys(state.gaps + state.unresolved_questions))

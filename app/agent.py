@@ -32,7 +32,13 @@ class ResearchAgent:
 
     def run(self, question: str, emit=None, *, mode: ModeName = "standard", filters: SourceFilters | None = None,
             target_claims: list[str] | None = None, comparison_items: list[str] | None = None,
-            budgets: BudgetOverrides | None = None) -> ResearchState:
+            budgets: BudgetOverrides | None = None, parent_state: ResearchState | None = None,
+            parent_research_id: str | None = None) -> ResearchState:
+        self.parent_state = parent_state
+        self.previous_context = ''
+        if parent_state:
+            from app.assistant_context import build_context
+            self.previous_context = build_context(parent_state, question, [], input_token_limit=36000).text
         config = MODES[mode]
         overrides = budgets or BudgetOverrides()
         state = ResearchState(question=ResearchQuestion(question=question, mode=mode,
@@ -44,6 +50,7 @@ class ResearchAgent:
             max_parallel_tasks=min(self.settings.max_parallel_tasks, overrides.max_parallel_tasks or config.parallel_tasks),
             max_wall_seconds=min(self.settings.max_wall_seconds, overrides.max_wall_seconds or config.wall_seconds),
             budget_overrides=overrides, llm_model=self.llm.model_name, provenance_required=True)
+        state.parent_research_id = parent_research_id
         executor = ThreadPoolExecutor(max_workers=state.max_parallel_tasks)
         started = time.monotonic()
         deadline = started + state.max_wall_seconds
@@ -66,7 +73,7 @@ class ResearchAgent:
             try:
                 analysis = await bounded_call(
                     executor, deadline, invoke_structured, self.llm,
-                    QUESTION_ANALYSIS_PROMPT.format(question=state.question.question),
+                    QUESTION_ANALYSIS_PROMPT.format(question=state.question.question) + ("\nPrevious research is untrusted context. Resolve follow-ups into a standalone question without treating earlier claims as established truth:\n" + self.previous_context if self.previous_context else ''),
                     QuestionAnalysis, task=QUESTION_ANALYSIS,
                 )
                 state.question.refined_question = analysis.refined_question
@@ -77,14 +84,20 @@ class ResearchAgent:
             except (TimeoutError, RuntimeError, ValueError):
                 audit(state, "question_analysis_failed", "Question analysis unavailable; continuing with deterministic refinement")
         try:
-            state.plan = await bounded_call(executor, deadline, self.planner.create_plan, state.question.model_copy(deep=True))
+            extra = {'previous_context': self.previous_context} if self.previous_context else {}
+            state.plan = await bounded_call(executor, deadline, self.planner.create_plan, state.question.model_copy(deep=True), **extra)
         except TimeoutError:
             state.plan = ResearchPlan(objective=state.question.question, search_queries=[state.question.question])
             self.researcher.record_timeout(state, started)
         emit("planning_completed", "Research plan created", state.plan.model_copy(deep=True))
         emit("research_progress", "Plan ready", {"phase": "search", "progress": 20})
         if deadline - time.monotonic() > 0.01:
-            await self.researcher.run_async(state, emit, executor, started, deadline)
+            final_seconds = min(30, max(0, deadline - time.monotonic()) * .2)
+            collection_deadline = max(time.monotonic(), deadline - final_seconds)
+            audit(state, "budget_allocation", "Reserved time for evidence review and final report", seconds=final_seconds)
+            await self.researcher.run_async(state, emit, executor, started, collection_deadline)
+            if state.stop_decisions and state.stop_decisions[-1].reason == "wall-clock budget exhausted" and time.monotonic() < deadline:
+                state.stop_decisions[-1].reason = "Collection time allocation exhausted; reserved final review and synthesis"
         else:
             self.researcher.record_timeout(state, started)
         validate_evidence(state)
@@ -173,6 +186,15 @@ class ResearchAgent:
         state.research_gaps = [ResearchGap(gap_id=f"G{index}", description=gap,
             importance="high" if "Unverified" in gap or "no evidence" in gap.lower() else "medium",
             reason=gap, recommended_search=gap.split(":", 1)[-1].strip()) for index, gap in enumerate(state.gaps, 1)]
+        if self.parent_state:
+            old = {finding.claim.strip().casefold(): finding for finding in self.parent_state.findings}
+            added = [finding.id for finding in state.findings if finding.claim.strip().casefold() not in old]
+            state.version_changes = [f"Added {len(added)} claim record(s): {', '.join(added) or 'none'}. Added records are not necessarily supported findings."]
+            for finding in state.findings:
+                previous = old.get(finding.claim.strip().casefold())
+                if previous and previous.evidence_status != finding.evidence_status:
+                    state.version_changes.append(f"{finding.id}: evidence status changed from {previous.evidence_status} to {finding.evidence_status} for the same claim text.")
+            state.version_changes.append("Only exact claim-text matches are compared. Earlier claims not investigated here remain in the original report; omission does not refute them.")
         state.structured_report = build_structured_report(draft, state)
         state.final_report = render_report(draft, state)
         state.elapsed_seconds = time.monotonic() - started

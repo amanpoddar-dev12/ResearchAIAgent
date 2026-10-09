@@ -1,0 +1,5 @@
+import { ArrowDown, ArrowUpRight } from "lucide-react";
+import { ProductVisual } from "./ProductVisual";
+export function LandingHero() {
+ return <section className="landing-hero" aria-labelledby="landing-headline"><div className="landing-hero-copy"><p className="landing-kicker"><span /> CURIOUS MINDS. CLEARER EVIDENCE.</p><h1 id="landing-headline">Go beyond the answer.<br /><em>Follow the evidence.</em></h1><p className="landing-lead">Turn a question into a cited report. Explore the evidence, talk to your research, and see what the sources actually say.</p><div className="landing-actions"><a href="/app" className="landing-primary">Start researching <ArrowUpRight size={18} /></a><a href="#how-it-works" className="landing-secondary">See how it works <ArrowDown size={16} /></a></div><p className="landing-hero-footnote">Built for research. Designed for the human doing it.</p></div><div className="landing-hero-art"><span className="landing-art-orbit" aria-hidden="true" /><ProductVisual hero /><span className="landing-margin-note">Your question, connected.<br />Your sources, within reach.</span></div></section>;
+}

@@ -1,11 +1,13 @@
+import { ResearchCompanion } from "./ResearchCompanion";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Bot, ChevronRight, MessageCircle, ArrowUp, Sparkles, Trash2, X, Paperclip, FileText, Plus } from "lucide-react";
 import type { ChatCitation, ChatResponse, Evidence, Finding, ResearchEvent, ResearchSource, ResearchState } from "../types/research";
 import { listSavedResearch, type SavedResearch } from "../storage/researchStorage";
 
-import { loadChat, listChats, saveChat, loadPDF, savePDF } from "../storage/chatStorage";
+import { createChat, deleteChat, loadChat, listChats, saveChat, loadPDF, savePDF } from "../storage/chatStorage";
 import type { ChatMessage, ChatRecord } from "../storage/chatStorage";
 import type { PDFDocument, PDFContext } from "../rag/pdfRetrieval";
+import { authHeaders } from '../services/auth';
 const emptySources: ResearchSource[] = [];
 const emptyFindings: Finding[] = [];
 const emptyEvidence: Evidence[] = [];
@@ -70,30 +72,30 @@ export function ResearchChat({ researchId, state: researchState, findings: resea
       const history = Array.isArray(saved?.messages) ? saved.messages.filter((item) => item && typeof item.content === "string" && ["user", "assistant"].includes(item.role)) : [];
       setMessages(history.map((item) => ({ ...item, citations: Array.isArray(item.citations) ? item.citations : [], limitations: Array.isArray(item.limitations) ? item.limitations : [] })));
       setInput(saved?.draft || "");
-      if (saved && conversationId !== researchId) setContextOverride(saved.state);
+      if (saved && (conversationId !== researchId || !researchState)) setContextOverride(saved.state);
       setPdf(document || null); setHistoryReady(true);
-    }).catch(() => { if (active) { setHistoryReady(true); setError("Local chat history could not be loaded. Browser storage may be unavailable."); } });
+    }).catch((error) => { if (active) { setHistoryReady(false); setError(error instanceof Error ? error.message : 'Chat history could not be loaded.'); } });
     return () => { active = false; activeRequest.current?.abort(); uploadRequest.current?.abort(); };
   }, [conversationId, researchId]);
 
   const persistMessages = (history: ChatMessage[]) => {
-    const record: ChatRecord = { id: conversationId, title: history.find((item) => item.role === "user")?.content.slice(0,100) || "New conversation", updatedAt: new Date().toISOString(), messages: history, draft: "", state: state ? { ...state, sources: sources.map(({ content: _content, ...source }) => source) } : null };
+    const record: ChatRecord = { id: conversationId, title: history.find((item) => item.role === "user")?.content.slice(0,100) || "New conversation", updatedAt: new Date().toISOString(), messages: history, draft: "", pdfName: pdf?.name, state: state ? { ...state, findings, evidence, sources } : null };
     saving.current = saving.current.catch(() => {}).then(() => saveChat(record)).then(() => {
-      setRecentChats((items) => [record, ...items.filter((item) => item.id !== record.id)].filter((item) => item.messages.length));
-    }).catch(() => setError("Chat history could not be saved locally."));
+      setRecentChats((items) => [record, ...items.filter((item) => item.id !== record.id)]);
+    }).catch((error) => setError(error instanceof Error ? error.message : 'Chat history could not be saved.'));
   };
 
   useEffect(() => { listChats().then(setRecentChats).catch(() => {}); }, []);
   useEffect(() => {
     if (!historyReady || loading) return;
     const timer = window.setTimeout(() => {
-      const record: ChatRecord = { id: conversationId, title: messages.find((item) => item.role === "user")?.content.slice(0, 100) || "New conversation", updatedAt: new Date().toISOString(), messages, draft: input, state: state ? { ...state, sources: sources.map(({ content: _content, ...source }) => source) } : null };
+      const record: ChatRecord = { id: conversationId, title: messages.find((item) => item.role === "user")?.content.slice(0, 100) || "New conversation", updatedAt: new Date().toISOString(), messages, draft: input, pdfName: pdf?.name, state: state ? { ...state, findings, evidence, sources } : null };
       saving.current = saving.current.catch(() => {}).then(() => saveChat(record)).then(() => {
-        setRecentChats((items) => [record, ...items.filter((item) => item.id !== record.id)].filter((item) => item.messages.length));
-      }).catch(() => setError("Chat history could not be saved. Browser storage may be full; your current chat remains open."));
+        setRecentChats((items) => [record, ...items.filter((item) => item.id !== record.id)]);
+      }).catch((error) => setError(error instanceof Error ? error.message : 'Chat history could not be saved; your current chat remains open.'));
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [historyReady, loading, messages, input, conversationId, state, sources]);
+  }, [historyReady, loading, messages, input, conversationId, state, findings, evidence, sources, pdf]);
 
   useEffect(() => {
     setPdfReady(false);
@@ -119,32 +121,52 @@ export function ResearchChat({ researchId, state: researchState, findings: resea
     return () => { worker.terminate(); pdfWorker.current = null; retrievalPending.current.forEach((pending) => pending.reject(new Error("The document changed."))); retrievalPending.current.clear(); };
   }, [pdf]);
 
-  const chooseConversation = (id: string) => {
+  const chooseConversation = async (id: string) => {
+    if (id === conversationId) return;
+    setHistoryReady(false);
+    try {
+      await saving.current;
+      await saveChat({ id: conversationId, title: messages.find((item) => item.role === 'user')?.content.slice(0, 100) || 'New conversation', updatedAt: new Date().toISOString(), messages, draft: input, pdfName: pdf?.name, state: state ? { ...state, findings, evidence, sources } : null });
+    } catch (error) {
+      setHistoryReady(true);
+      setError(error instanceof Error ? error.message : 'Save this conversation before switching.');
+      return;
+    }
     if (id.startsWith("general-chat-")) { try { localStorage.setItem("research-assistant-current-chat", id); } catch { /* Optional selected-thread preference. */ } }
     activeRequest.current?.abort(); uploadRequest.current?.abort();
-    setLoading(false); setUploading(false); setContextOverride(id === researchId ? undefined : null); setConversationId(id); setPdfExcerpt(null);
+    setHistoryReady(false); setLoading(false); setUploading(false); setContextOverride(id === researchId ? undefined : null); setConversationId(id); setPdfExcerpt(null);
   };
-  const newConversation = () => {
-    const id = `general-chat-${crypto.randomUUID()}`;
-    try { localStorage.setItem("research-assistant-current-chat", id); } catch { /* Chat remains usable without localStorage. */ }
-    chooseConversation(id);
+  const newConversation = async (general = false) => {
+    const record = createChat(general || !state ? null : { ...state, findings, evidence, sources });
+    setHistoryReady(false); setError('');
+    try {
+      await saving.current;
+      // Save before switching so the load effect restores this thread's exact context.
+      if (!general && pdf) await savePDF(record.id, pdf);
+      await saveChat(record);
+      setRecentChats((items) => [record, ...items]);
+      await chooseConversation(record.id);
+    } catch (error) {
+      setHistoryReady(true);
+      setError(error instanceof Error ? error.message : 'The new conversation could not be saved.');
+    }
   };
   const uploadPDF = async (file: File) => {
     if (!file.name.toLowerCase().endsWith(".pdf") || file.size > 25 * 1024 * 1024) { setError("Choose a PDF that is 25 MB or smaller."); return; }
     const controller = new AbortController(); uploadRequest.current = controller;
     setUploading(true); setError("");
     try {
-      const response = await fetch(`${apiUrl}/api/assistant/pdf?name=${encodeURIComponent(file.name.slice(0,200))}`, { method: "POST", headers: { "Content-Type": "application/pdf" }, body: file, signal: controller.signal });
+      const response = await fetch(`${apiUrl}/api/assistant/pdf?name=${encodeURIComponent(file.name.slice(0,200))}`, { method: "POST", headers: { "Content-Type": "application/pdf", ...await authHeaders() }, body: file, signal: controller.signal });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "This PDF could not be processed.");
       if (controller.signal.aborted) return;
       const document = data as PDFDocument;
       setPdf(document);
-      try { await savePDF(conversationId, document); } catch { setError("PDF is ready, but could not be saved locally. It will need uploading again after refresh."); }
+      try { await savePDF(conversationId, document); } catch (error) { setError(error instanceof Error ? error.message : 'PDF is ready, but its conversation attachment could not be saved.'); }
     } catch (uploadError) { if (!controller.signal.aborted) setError(uploadError instanceof Error ? uploadError.message : "PDF upload failed."); }
     finally { if (!controller.signal.aborted) setUploading(false); }
   };
-  const removePDF = async () => { setPdf(null); setPdfExcerpt(null); try { await savePDF(conversationId, null); } catch { setError("The PDF attachment could not be removed from browser storage."); } };
+  const removePDF = async () => { try { await savePDF(conversationId, null); setPdf(null); setPdfExcerpt(null); } catch (error) { setError(error instanceof Error ? error.message : 'The PDF attachment could not be removed.'); } };
 
   useEffect(() => {
     const thread = threadEnd.current?.parentElement;
@@ -186,23 +208,24 @@ export function ResearchChat({ researchId, state: researchState, findings: resea
   }, [open, embedded]);
 
   const suggestions = useMemo(() => {
-    if (pdf) return [`Summarize the main points of "${pdf.name}".`, "What conclusions are supported by this PDF?", "What limitations does this PDF mention?"];
+    if (pdf) return ["Summarize the main points of this PDF.", "What conclusions are supported by this PDF?", "What limitations does this PDF mention?"];
     if (!state) return ["Explain what an API is.", "Help me understand a topic step by step.", "How can I evaluate whether a source is reliable?"];
     const title = (state.structured_report?.title || state.final_report?.match(/^#\s+(.+)$/m)?.[1] || state.question.refined_question || state.question.question).slice(0, 140);
     const chart = state.structured_report?.charts[0];
     const claim = findings[0];
     const limitation = state.structured_report?.sections.find((section) => /limitation|gap|future/i.test(section.title));
     return [
-      `What were the main findings in "${title}"?`,
-      chart ? `Explain the chart "${chart.title.slice(0, 140)}".` : claim ? `What evidence supports "${claim.claim.slice(0, 140)}"?` : `Which sources support the report "${title}"?`,
-      limitation ? `What does the "${limitation.title}" section say?` : `What limitations does "${title}" identify?`,
+      "What were the main findings?",
+      chart ? "Explain the first chart in this report." : claim ? `What evidence supports "${claim.claim.slice(0, 140)}"?` : `Which sources support the report "${title}"?`,
+      limitation ? "Explain the report’s limitations and unanswered questions." : `What limitations does "${title}" identify?`,
     ];
   }, [state, findings, pdf]);
 
   const clearChat = () => {
+    if (!window.confirm("Clear all messages in this conversation? This cannot be undone. The research context and PDF attachment will remain.")) return;
     activeRequest.current?.abort(); activeRequest.current = null;
     setMessages([]); setInput(""); setError(""); setLoading(false);
-  };
+  };  const removeConversation = async () => {    if (!window.confirm('Permanently delete this conversation and its messages? Saved research and uploaded PDF files will remain.')) return;    setHistoryReady(false);    try {      await saving.current;      const record = createChat(null);      await saveChat(record);      await deleteChat(conversationId);      setRecentChats(items => items.filter(item => item.id !== conversationId));      try { localStorage.setItem('research-assistant-current-chat', record.id); } catch { /* Optional preference. */ }      setContextOverride(null); setPdf(null); setMessages([]); setInput(''); setConversationId(record.id);    } catch (error) { setHistoryReady(true); setError(error instanceof Error ? error.message : 'The conversation could not be deleted.'); }  };
 
   const submit = async (value = input) => {
     const message = value.trim();
@@ -228,7 +251,7 @@ export function ResearchChat({ researchId, state: researchState, findings: resea
       }
       if (controller.signal.aborted) return;
       const response = await fetch(`${apiUrl}/api/research/${conversationId}/chat/stream`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
+        method: "POST", headers: { "Content-Type": "application/json", ...await authHeaders() }, signal: controller.signal,
         body: JSON.stringify({ message, history, ...(pdfContext ? { pdf_context: pdfContext } : {}), ...(state ? { saved_state: { ...state, findings, evidence, sources } } : {}) }),
       });
       if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail || "The research assistant is unavailable.");
@@ -290,16 +313,19 @@ export function ResearchChat({ researchId, state: researchState, findings: resea
   return <>{!embedded && <button ref={launcher} type="button" className="chat-launcher button-primary rounded-full    px-5 py-3 shadow-soft   " onClick={() => setOpen(true)} aria-label="Open research assistant" aria-expanded={open} aria-controls="research-chat-panel"><MessageCircle size={18} /> Ask assistant<Sparkles size={14} className="opacity-80" /></button>}
     {(embedded || open) && <div ref={chatWindow} id="research-chat-panel" className={embedded ? "card flex min-h-[28rem] max-h-[42rem] flex-col overflow-hidden" : "chat-panel card overflow-hidden border-border/70 bg-surface  dark:border-border/60 dark:bg-surface"} role={embedded ? "region" : "dialog"} aria-label="Research assistant">
       <div className="chat-header -mx-4 -mt-4 flex shrink-0 items-start justify-between gap-2 border-b border-border px-4 py-3">
-        <div><div className="flex items-center gap-2"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl    text-primary-foreground shadow-soft "><Bot size={19} /></span><h2 className="font-medium">Research Assistant</h2></div><p className="mt-1 text-xs text-muted-foreground">{pdf ? `PDF: ${pdf.name}` : state ? "Research context and general knowledge." : "Ask a question to get started."}</p></div>
-        <div className="flex gap-1"><button type="button" className="icon-button" onClick={clearChat} disabled={!historyReady} aria-label="Clear chat" title="Clear chat"><Trash2 size={16} /></button>{!embedded && <button type="button" className="icon-button" onClick={() => { setOpen(false); launcher.current?.focus(); }} aria-label="Close research assistant"><X size={17} /></button>}</div>
+        <div><div className="flex items-center gap-2"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl    text-primary-foreground shadow-soft "><Bot size={19} /></span><h2 className="font-medium">Research Assistant</h2></div><p className="mt-1 text-xs text-muted-foreground">{pdf ? `PDF: ${pdf.name}` : state ? `Research: ${state.question.refined_question || state.question.question}` : "General chat · no research attached"}</p></div>
+        <div className="flex gap-1"><button type="button" className="button-secondary px-2 text-xs" onClick={() => void newConversation()} disabled={!historyReady || loading || uploading} aria-label="New chat"><Plus size={16} />New chat</button><button type="button" className="icon-button" onClick={clearChat} disabled={!historyReady} aria-label="Clear messages" title="Clear messages; keep research and PDF"><Trash2 size={16} /></button>{!embedded && <button type="button" className="icon-button" onClick={() => { setOpen(false); launcher.current?.focus(); }} aria-label="Close research assistant"><X size={17} /></button>}</div>
       </div>
+      <details className="chat-context mt-2 shrink-0 rounded-lg border border-border px-3 py-2"><summary className="cursor-pointer text-xs">Using: {pdf ? 'uploaded PDF' : state ? 'research report' : 'general knowledge'}</summary><p className="mt-2 break-words text-xs text-muted-foreground">{pdf ? `${pdf.name} · ${pdf.page_count} pages. Answers use passages retrieved from this document.` : state ? state.question.refined_question || state.question.question : 'No research or document is attached to this conversation.'}</p></details>
+      <div className="mt-3 flex shrink-0 items-center gap-2"><label className="sr-only" htmlFor="chat-history-select">Previous conversations</label><select id="chat-history-select" className="select min-w-0 flex-1 text-sm" value={conversationId} onChange={(event) => chooseConversation(event.target.value)} disabled={!historyReady || loading || uploading}><option value={conversationId}>{recentChats.find((chat) => chat.id === conversationId)?.title || "Current conversation"}</option>{recentChats.filter((chat) => chat.id !== conversationId && (chat.messages.length || chat.draft.trim())).map((chat) => <option key={chat.id} value={chat.id}>{chat.title} · {new Date(chat.updatedAt).toLocaleDateString()}</option>)}</select><button type="button" className="button-secondary shrink-0 px-2 text-xs" onClick={() => void newConversation(true)} disabled={!historyReady || loading || uploading}>General chat</button></div>
       <details className="chat-tools mt-3 shrink-0 rounded-xl border border-border px-3 py-2"><summary className="cursor-pointer text-xs text-muted-foreground">Conversation &amp; document{pdf ? ` · ${pdf.page_count} PDF pages` : ""}</summary>
-      <div className="mt-3 flex items-center gap-2"><label className="sr-only" htmlFor="chat-history-select">Previous conversations</label><select id="chat-history-select" className="select min-w-0 flex-1" value={conversationId} onChange={(event) => chooseConversation(event.target.value)} disabled={loading || uploading}><option value={conversationId}>Current conversation</option>{recentChats.filter((chat) => chat.id !== conversationId).slice(0,20).map((chat) => <option key={chat.id} value={chat.id}>{chat.title}</option>)}</select><button type="button" className="icon-button" onClick={newConversation} disabled={loading || uploading} title="New chat" aria-label="New chat"><Plus size={16} /></button></div>
+      <p className="mt-2 text-xs text-muted-foreground">New chat keeps the selected research and PDF. General chat starts without either.</p>      <button type="button" className="button-secondary mt-3 text-xs text-destructive" disabled={loading || uploading || !historyReady} onClick={() => void removeConversation()}>Delete this conversation</button>
       {pdf && <div className="mt-3 rounded-xl border border-border bg-accent/10 p-3 text-xs dark:border-border dark:bg-primary/10"><div className="flex items-center gap-2"><FileText size={16} /><span className="min-w-0 flex-1 truncate" title={pdf.name}>{pdf.name} · {pdf.page_count} pages</span><button type="button" className="icon-button" aria-label="Remove PDF" disabled={loading || uploading} onClick={() => void removePDF()}><X size={14} /></button></div><p className="mt-1 text-muted-foreground">{pdfReady ? "PDF context active. Remove it to return to research or general chat." : "Building the document index..."}</p>{pdf.warnings.map((warning) => <p key={warning} className="mt-1 text-warning dark:text-warning">{warning}</p>)}</div>}
       </details>
       {pdf && !pdfReady && !uploading && <p role="status" className="mt-2 text-xs text-muted-foreground">Preparing the PDF index...</p>}
       {uploading && <p role="status" className="mt-3 text-xs text-muted-foreground"><span className="chat-pulse mr-2 inline-block" />Extracting PDF text... Large documents may take up to 90 seconds.</p>}
       {pdfExcerpt && <dialog ref={pdfDialog} onCancel={() => setPdfExcerpt(null)} onClose={() => { if (pdfDialog.current && !pdfDialog.current.open) setPdfExcerpt(null); }} className="pdf-excerpt-preview w-[min(94vw,42rem)] max-h-[80dvh] overflow-auto rounded-xl border border-border bg-surface p-6 text-foreground" aria-labelledby="pdf-excerpt-title"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><span className="badge badge-indigo">Page {pdfExcerpt.citation_id.slice(1)}</span><h2 id="pdf-excerpt-title" className="mt-3 break-words">{pdfExcerpt.title}</h2></div><button autoFocus type="button" className="icon-button" aria-label="Close PDF excerpt" onClick={() => setPdfExcerpt(null)}><X size={18} /></button></div><p className="mt-4 text-xs text-muted-foreground">Extracted passage used for this answer</p><blockquote className="mt-2 whitespace-pre-wrap border-l-2 border-link bg-accent/10 p-4 text-sm leading-6">{pdfExcerpt.supporting_text || "The extracted excerpt is unavailable."}</blockquote></dialog>}
+      {!historyReady && !error && <p role="status" className="mt-2 text-xs text-muted-foreground">Loading conversation and context...</p>}
       <div className="chat-messages" aria-live="polite" aria-busy={loading}>
         {!messages.length && <div className="py-4"><p className="text-sm text-muted-foreground">{pdf ? "Ask a question about the uploaded PDF." : state ? "Ask about this report or any general question." : "How can I help you today?"}</p><div className="mt-4 flex flex-wrap gap-2">{suggestions.map((suggestion) => <button type="button" key={suggestion} className="chip text-left" disabled={!historyReady || uploading || Boolean(pdf && !pdfReady)} onClick={() => void submit(suggestion)}>{suggestion}<ChevronRight size={13} className="ml-1 inline" /></button>)}</div></div>}
         {messages.filter((message) => message.role === "user" || message.content).map((message) => <article key={message.id} className={message.role === "user" ? "chat-message chat-user rounded-xl rounded-br-sm    shadow-soft" : "chat-message chat-assistant rounded-xl rounded-bl-sm"}>
@@ -312,7 +338,8 @@ export function ResearchChat({ researchId, state: researchState, findings: resea
         <div ref={threadEnd} />
       </div>
       {error && <div role="alert" className="mt-3 rounded-lg border border-border bg-destructive/10 p-3 text-xs text-destructive dark:border-border dark:bg-destructive/10 dark:text-destructive">{error}<button type="button" className="ml-2 underline" onClick={() => setError("")}>Dismiss</button></div>}
-      <form className="chat-composer mt-3 shrink-0 flex gap-2 border-t border-border pt-4 dark:border-border" onSubmit={(event) => { event.preventDefault(); void submit(); }}><input ref={uploadInput} type="file" accept="application/pdf,.pdf" className="hidden" aria-label="Upload PDF file" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadPDF(file); event.target.value = ""; }} /><button type="button" className="icon-button self-end" title="Upload PDF (up to 25 MB)" aria-label="Upload PDF" disabled={loading || uploading || !historyReady} onClick={() => uploadInput.current?.click()}><Paperclip size={18} /></button><label htmlFor="research-chat-input" className="sr-only">Ask the research assistant</label><textarea ref={inputBox} id="research-chat-input" rows={2} maxLength={2000} value={input} onChange={(event) => setInput(event.target.value)} placeholder={pdf ? "Ask about this PDF..." : state ? "Ask about the report or anything else..." : "Ask anything..."} className="select min-h-12 flex-1 resize-none rounded-xl border-border bg-surface text-sm dark:bg-background/60" onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit(); } }} disabled={loading || uploading || Boolean(pdf && !pdfReady) || !historyReady} /><button className="button-primary self-end px-3" disabled={loading || uploading || Boolean(pdf && !pdfReady) || !historyReady || !input.trim()} aria-label="Send question" title="Send question"><ArrowUp size={18} /></button></form>
+      <ResearchCompanion active={loading || uploading} compact />
+      <form className="chat-composer mt-1 shrink-0 flex gap-2 border-t border-border pt-4 dark:border-border" onSubmit={(event) => { event.preventDefault(); void submit(); }}><input ref={uploadInput} type="file" accept="application/pdf,.pdf" className="hidden" aria-label="Upload PDF file" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadPDF(file); event.target.value = ""; }} /><button type="button" className="icon-button self-end" title="Upload PDF (up to 25 MB)" aria-label="Upload PDF" disabled={loading || uploading || !historyReady} onClick={() => uploadInput.current?.click()}><Paperclip size={18} /></button><label htmlFor="research-chat-input" className="sr-only">Ask the research assistant</label><textarea ref={inputBox} id="research-chat-input" rows={2} maxLength={2000} value={input} onChange={(event) => setInput(event.target.value)} placeholder={pdf ? "Ask about this PDF..." : state ? "Ask about the report or anything else..." : "Ask anything..."} className="select min-h-12 flex-1 resize-none rounded-xl border-border bg-surface text-sm dark:bg-background/60" onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit(); } }} disabled={loading || uploading || Boolean(pdf && !pdfReady) || !historyReady} /><button className="button-primary self-end px-3" disabled={loading || uploading || Boolean(pdf && !pdfReady) || !historyReady || !input.trim()} aria-label="Send question" title="Send question"><ArrowUp size={18} /></button></form>
       <p className="mt-2 text-center text-[10px] text-muted-foreground">Enter to send · Shift + Enter for a new line</p>
     </div>}</>;
 }

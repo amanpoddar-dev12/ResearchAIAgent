@@ -6,6 +6,7 @@ from functools import partial
 import time
 
 from app.models import AuditEntry, StopDecision
+from app.source_quality import independent_source_count
 
 
 def audit(state, action: str, message: str, **details):
@@ -47,8 +48,8 @@ def coverage_gaps(state):
     gaps = []
     sources = {source.id: source for source in state.sources}
     for claim in state.findings:
-        domains = {sources[sid].domain for sid in claim.source_ids if sid in sources}
-        independent = len(domains) >= (2 if state.semantic_validation_required and state.mode != "quick" else 1)
+        origins = independent_source_count([sources[sid] for sid in claim.source_ids if sid in sources])
+        independent = origins >= (2 if state.semantic_validation_required and state.mode != "quick" else 1)
         if claim.evidence_status in {"Supported", "Contradicted"} and independent:
             covered.update(claim.sub_question_ids)
         if claim.evidence_status in {"Unverified", "Partially Supported"}:

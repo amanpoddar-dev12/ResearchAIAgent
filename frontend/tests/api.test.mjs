@@ -6,7 +6,8 @@ import ts from "typescript";
 // Run the actual API module with synthetic build-time env and offline browser transports.
 const source = await readFile(new URL("../src/services/api.ts", import.meta.url), "utf8");
 async function loadApi(env) {
-  const { outputText } = ts.transpileModule(source.replaceAll("import.meta.env", JSON.stringify(env)), {
+  const isolated = source.replace("import { authHeaders, cloudEnabled } from './auth';", 'const cloudEnabled = false; const authHeaders = async () => ({});').replace("window.dispatchEvent(new Event('research-usage-changed'));", '');
+  const { outputText } = ts.transpileModule(isolated.replaceAll("import.meta.env", JSON.stringify(env)), {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2020 },
   });
   return import("data:text/javascript;base64," + Buffer.from(outputText).toString("base64"));

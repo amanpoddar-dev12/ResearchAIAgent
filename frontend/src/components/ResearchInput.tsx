@@ -1,3 +1,5 @@
+import { ResearchCompanion } from "./ResearchCompanion";
+import { modeHelp, usefulIdea } from '../ui/researchPresentation';
 import { useEffect, useState } from "react";
 import { freshResearchIdeas, loadResearchIdeas, randomIdeas } from "../services/researchIdeas";
 import { ArrowUp, Sparkles } from "lucide-react";
@@ -23,7 +25,7 @@ export function ResearchInput({ value, setValue, mode, setMode, maxSources, setM
   useEffect(() => {
     let active = true;
     let pool = freshResearchIdeas();
-    loadResearchIdeas().then((items) => { pool = items; if (active) setIdeas(randomIdeas(pool)); });
+    loadResearchIdeas().then((items) => { const relevant = items.filter(usefulIdea); pool = relevant.length >= 3 ? relevant : pool; if (active) setIdeas(randomIdeas(pool)); });
     const timer = window.setInterval(() => setIdeas(randomIdeas(pool)), 5 * 60000);
     return () => { active = false; window.clearInterval(timer); };
   }, []);
@@ -39,12 +41,15 @@ export function ResearchInput({ value, setValue, mode, setMode, maxSources, setM
       <fieldset disabled={disabled} className="space-y-4">
         <label className="block text-sm font-medium" htmlFor="research-question">Research question</label>
         <textarea id="research-question" required minLength={3} value={value} onChange={(event) => setValue(event.target.value)} rows={3} placeholder="What would you like to investigate?" className="w-full rounded-xl border border-border bg-transparent p-3 outline-none focus:ring-2 focus:ring-primary dark:border-border" />
+        <ResearchCompanion compact active={false} />
         <div className="flex flex-wrap gap-3">
           <label className="flex-1 text-xs">Research mode<select aria-label="Research mode" value={mode} onChange={(event) => { setMode(event.target.value as ResearchMode); setTargets(""); }} className="select mt-1 block min-h-10 w-full">{modes.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-          <label className="text-xs">Maximum sources<select aria-label="Maximum sources" value={maxSources} onChange={(event) => setMaxSources(Number(event.target.value))} className="select mt-1 block min-h-10">{[5, 10, 15, 20].map((number) => <option key={number} value={number}>{number}</option>)}</select></label>
+
         </div>
+        <p className="text-xs text-muted-foreground">{modeHelp[mode]}</p>
         {(mode === "fact_check" || mode === "compare") && <label className="block text-sm">{mode === "compare" ? "Items to compare (one per line, 2–6)" : "Specific claims to verify (one per line, up to 10; defaults to your question)"}<textarea aria-label={mode === "compare" ? "Items to compare" : "Claims to verify"} rows={3} value={targets} onChange={(event) => setTargets(event.target.value)} className="mt-2 w-full rounded-lg border border-border bg-transparent p-3 dark:border-border" /></label>}
-        <details className="rounded-xl border border-border p-3 dark:border-border">
+        <details className="rounded-xl border border-border p-3 dark:border-border"><summary className="cursor-pointer text-sm font-medium">Advanced settings</summary><div className="mt-3">          <label className="block text-xs">Maximum sources<input aria-label="Maximum sources" type="number" min={1} max={100} value={budgets.max_sources ?? maxSources} onChange={event => { if (!event.target.value) { setBudgets({ ...budgets, max_sources: undefined }); return; } const count = Number(event.target.value); setBudgets({ ...budgets, max_sources: count }); setMaxSources(Math.max(1, Math.min(20, count))); }} className="select mt-1 block w-full" /></label><p className="mt-2 text-xs text-muted-foreground">This is a requested upper limit. Server limits may reduce it; the final report shows the effective budget.</p></div>
+        <details className="mt-3">
           <summary className="cursor-pointer text-sm font-medium">Source filters</summary>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <label className="text-xs">Published from<input aria-label="Published from" type="date" value={filters.date_from || ""} onChange={(event) => setFilters({ ...filters, date_from: event.target.value || null })} className="select mt-1 block w-full" /></label>
@@ -56,9 +61,10 @@ export function ResearchInput({ value, setValue, mode, setMode, maxSources, setM
             <p className="text-xs text-muted-foreground sm:col-span-2">Filters apply before extraction. Date filters exclude undated sources. Types are inferred; primary preference ranks each search batch.</p>
           </div>
         </details>
-        <details className="rounded-xl border border-border p-3 dark:border-border"><summary className="cursor-pointer text-sm font-medium">Research budgets</summary><p className="mt-2 text-xs text-muted-foreground">Leave blank to use mode defaults. Maximum sources above applies unless overridden here.</p><div className="mt-3 grid gap-3 sm:grid-cols-2">{([
-          ["max_searches", "Searches", 100], ["max_sources", "Sources", 100], ["max_iterations", "Iterations", 20], ["max_parallel_tasks", "Parallel searches", 8], ["max_wall_seconds", "Time limit (seconds)", 3600],
+        <details className="rounded-xl border border-border p-3 dark:border-border"><summary className="cursor-pointer text-sm font-medium">Research budgets</summary><p className="mt-2 text-xs text-muted-foreground">Leave blank to use mode defaults. Maximum sources above is shared across these controls. Effective limits are also bounded by the server.</p><div className="mt-3 grid gap-3 sm:grid-cols-2">{([
+          ["max_searches", "Searches", 100], ["max_iterations", "Iterations", 20], ["max_parallel_tasks", "Parallel searches", 8], ["max_wall_seconds", "Time limit (seconds)", 3600],
         ] as const).map(([key, label, max]) => <label key={key} className="text-xs">{label}<input aria-label={label} type="number" min={1} max={max} step={1} value={budgets[key] ?? ""} placeholder="Mode default" onChange={(event) => setBudgets({ ...budgets, [key]: event.target.value ? Number(event.target.value) : undefined })} className="select mt-1 block w-full" /></label>)}</div></details>
+        </details>
         {invalidDates && <p role="alert" className="text-sm text-destructive">Start date must be on or before end date.</p>}
         {invalidTargets && <p className="text-sm text-muted-foreground">Enter at least two distinct comparison items.</p>}
         <button disabled={disabled || value.trim().length < 3 || invalidDates || invalidTargets} className="button-primary min-h-10 w-full justify-center">Research <ArrowUp size={16} aria-hidden="true" /></button>

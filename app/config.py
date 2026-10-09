@@ -6,6 +6,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    supabase_url: str = ""
+    supabase_publishable_key: str = ""
+    supabase_secret_key: str = ""
     gemini_api_key: str = Field(default="")
     gemini_model: str = Field(default="")
     groq_api_key: str = Field(default="")

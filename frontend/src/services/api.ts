@@ -1,13 +1,15 @@
 import type { ChatResponse, ResearchEvent, ResearchRequest, ResearchState } from "../types/research";
 import type { HistoryMessage, RetrievalSelection, SessionDocument } from "../rag/retrieval";
+import { authHeaders, cloudEnabled } from './auth';
 
 // Local fetch and SSE requests must use Vite's /api proxy, even when a production URL is configured.
 const API_URL = (import.meta.env.DEV ? "" : import.meta.env.VITE_API_URL || import.meta.env.VITE_BACKEND_URL || "").replace(/\/$/, "");
 const backendHint = API_URL || import.meta.env.VITE_BACKEND_URL || "the configured FastAPI port";
 
 async function apiRequest(url: string, init?: RequestInit): Promise<Response> {
+  const authorization = cloudEnabled ? await authHeaders() : {};
   try {
-    return await fetch(url, init);
+    return await fetch(url, { ...init, headers: { ...init?.headers, ...authorization } });
   } catch {
     throw new Error(
       `The research backend is not reachable at ${backendHint}. Start FastAPI on the configured backend port and retry.`,
@@ -24,6 +26,7 @@ export async function startResearch(payload: ResearchRequest): Promise<string> {
     throw new Error(Array.isArray(detail) ? detail.map((item: { msg: string }) => item.msg).join("; ") : detail || "Could not start research.");
   }
 
+  window.dispatchEvent(new Event('research-usage-changed'));
   return (await response.json()).research_id;
 }
 
@@ -83,7 +86,7 @@ export async function streamResearchChat(id: string, message: string, retrieval:
 }
 
 export function streamResearch(id: string, onEvent: (event: ResearchEvent) => void, onError: (error: Error) => void): () => void {
-  let source: EventSource;
+  let source: Pick<EventSource, 'close' | 'onmessage' | 'onerror'>;
   let sequence = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let connectionFailures = 0;
@@ -92,7 +95,7 @@ export function streamResearch(id: string, onEvent: (event: ResearchEvent) => vo
   let recoveryController: AbortController | undefined;
   const stop = () => {
     stopped = true;
-    source.close();
+    source?.close();
     clearTimeout(reconnectTimer);
     recoveryController?.abort();
   };
@@ -155,7 +158,8 @@ export function streamResearch(id: string, onEvent: (event: ResearchEvent) => vo
   };
   const connect = () => {
     if (stopped) return;
-    source = new EventSource(`${API_URL}/api/research/${id}/stream${sequence ? `?after=${sequence}` : ""}`);
+    const url = `${API_URL}/api/research/${id}/stream${sequence ? `?after=${sequence}` : ""}`;
+    source = cloudEnabled ? authorizedEvents(url) : new EventSource(url);
     source.onmessage = (message) => {
       if (stopped) return;
       let event: ResearchEvent;
@@ -176,6 +180,33 @@ export function streamResearch(id: string, onEvent: (event: ResearchEvent) => vo
   };
   connect();
   return stop;
+}
+
+function authorizedEvents(url: string): Pick<EventSource, 'close' | 'onmessage' | 'onerror'> {
+  const controller = new AbortController();
+  const source: Pick<EventSource, 'close' | 'onmessage' | 'onerror'> = { close: () => controller.abort(), onmessage: null, onerror: null };
+  void (async () => {
+    try {
+      const response = await apiRequest(url, { signal: controller.signal });
+      if (!response.ok || !response.body) throw new Error('Research stream unavailable.');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      try {
+        while (!controller.signal.aborted) {
+          const { value, done } = await reader.read();
+          buffer += decoder.decode(value, { stream: !done });
+          const frames = buffer.split(/\r?\n\r?\n/); buffer = frames.pop() || '';
+          for (const frame of frames) {
+            const data = frame.split(/\r?\n/).filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trimStart()).join('\n');
+            if (data) source.onmessage?.call(null as unknown as EventSource, new MessageEvent('message', { data }));
+          }
+          if (done) { if (!controller.signal.aborted) throw new Error('Stream ended.'); break; }
+        }
+      } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+    } catch { if (!controller.signal.aborted) source.onerror?.call(null as unknown as EventSource, new Event('error')); }
+  })();
+  return source;
 }
 
 export async function cancelResearch(id: string): Promise<void> {

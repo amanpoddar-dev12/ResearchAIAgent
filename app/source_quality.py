@@ -9,6 +9,34 @@ from app.models import Source, SourceFilters, SourceQuality
 from app.modes import ModeConfig, SourceType
 
 
+def independent_source_count(sources: list[Source]) -> int:
+    """Conservative origin proxy: shared DOI references do not prove replication."""
+    groups: list[tuple[set[str], set[str]]] = []
+    for source in sources:
+        domains = {source.domain.casefold()}
+        studies = {url.rstrip('/').casefold() for url in [source.url, *source.reference_urls]
+                   if (urlsplit(url).hostname or '').casefold() in {'doi.org', 'dx.doi.org'}}
+        merged = []
+        for old_domains, old_studies in groups:
+            if domains & old_domains or studies & old_studies:
+                domains |= old_domains
+                studies |= old_studies
+            else:
+                merged.append((old_domains, old_studies))
+        # Repeat to handle a bridge between earlier groups.
+        while any(domains & d or studies & s for d, s in merged):
+            rest = []
+            for d, s in merged:
+                if domains & d or studies & s:
+                    domains |= d
+                    studies |= s
+                else:
+                    rest.append((d, s))
+            merged = rest
+        groups = [*merged, (domains, studies)]
+    return len(groups)
+
+
 def publication_date(value: str | None) -> date | None:
     if not value:
         return None

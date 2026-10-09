@@ -7,14 +7,14 @@ import math
 import time
 from urllib.parse import urlsplit
 from app.extractor import Extractor
-from app.models import GapAssessment, ResearchGap, ResearchState, Source, SubQuestion, Finding, StopDecision, EvidenceAssessmentBatch, SearchResult
+from app.models import GapAssessment, ResearchGap, ResearchState, Source, SubQuestion, Finding, StopDecision, EvidenceAssessmentBatch, SearchResult, ClaimExtraction
 from app.prompts import GAP_DETECTION, EVIDENCE_EVALUATION
 from app.llm import LLMClient, invoke_structured
 from app.llm.routing import GAP_ANALYSIS
 from tools.web_search import search_web, normalize_url
 from tools.webpage import fetch_webpage
 from app.modes import MODES
-from app.source_quality import filter_reason, infer_source_type, score_source
+from app.source_quality import filter_reason, infer_source_type, score_source, independent_source_count
 from app.deduplication import near_duplicate
 from app.evidence import merge_extraction, validate_evidence, apply_assessments
 from app.research_control import audit, bounded_call, coverage_gaps, decide_stop
@@ -139,6 +139,7 @@ class Researcher:
         batch_size = max(1, math.ceil(min(len(tasks), state.max_searches) / state.max_iterations))
         emitted_claims, emitted_evidence, analyzed = set(), set(), set()
         gap_rounds = 0
+        quantitative_passes = 0
         try:
             for iteration in range(state.max_iterations):
                 if time.monotonic() >= deadline:
@@ -146,15 +147,19 @@ class Researcher:
                 state.iteration = iteration + 1
                 before_evidence = sum(len(c.supporting_evidence_ids) + len(c.contradicting_evidence_ids) for c in state.findings)
                 before_sources = len(state.sources)
+                # Keep room for evidence-driven follow-ups without raising any budget.
+                remaining_rounds = min(state.max_iterations - iteration, state.max_searches - state.searches_performed)
+                round_source_limit = min(state.max_sources, before_sources + math.ceil(
+                    (state.max_sources - before_sources) / max(1, remaining_rounds)))
                 slots = min(batch_size, state.max_searches - state.searches_performed)
                 # Each wave is ready-only; dependent questions cannot overtake prerequisites.
-                while slots > 0 and pending and len(state.sources) < state.max_sources:
+                while slots > 0 and pending and len(state.sources) < round_source_limit:
                     if time.monotonic() >= deadline:
                         raise TimeoutError()
                     satisfied = set(state.searched_sub_questions)
                     if state.semantic_validation_required:
                         satisfied = {qid for claim in state.findings if claim.evidence_status in {"Supported", "Contradicted"}
-                                     and len({source.domain for source in state.sources if source.id in claim.source_ids}) >= (1 if state.mode == "quick" else 2)
+                                     and independent_source_count([source for source in state.sources if source.id in claim.source_ids]) >= (1 if state.mode == "quick" else 2)
                                      for qid in claim.sub_question_ids}
                     ready = [entry for entry in pending if entry[0].strip().casefold() not in state.searched_queries and all(all(dep in satisfied for dep in task_map[qid].depends_on) for qid in entry[2] if qid in task_map)]
                     wave = ready[:min(slots, state.max_parallel_tasks)]
@@ -192,7 +197,7 @@ class Researcher:
                             wave_candidates.append((source, qids))
                     # Rank the whole parallel wave before spending the source cap.
                     used_domains = {source.domain for source in state.sources}
-                    wave_candidates.sort(key=lambda entry: (state.filters.prefer_primary and entry[0].source_type in {"primary", "academic", "documentation"}, entry[0].domain not in used_domains, entry[0].quality.total), reverse=True)
+                    wave_candidates.sort(key=lambda entry: (state.filters.prefer_primary and entry[0].source_type in {"primary", "academic", "documentation"}, entry[0].quality.total + (.05 if entry[0].source_type in {"primary", "academic", "documentation"} else 0), entry[0].domain not in used_domains), reverse=True)
                     for source, qids in wave_candidates:
                         if source.quality.relevance < mode.relevance_threshold:
                             state.filtered_sources.append({"url": source.url, "reason": "Below relevance threshold"})
@@ -210,6 +215,9 @@ class Researcher:
                         if len(state.sources) >= state.max_sources:
                             audit(state, "source_filtered", "Source budget reached", url=source.url)
                             continue
+                        if len(state.sources) >= round_source_limit:
+                            audit(state, "source_filtered", "Source capacity reserved for follow-up evidence", url=source.url)
+                            continue
                         source.id, source.sub_question_ids = f"S{len(state.sources)+1}", qids
                         state.sources.append(source)
                         audit(state, "source_kept", source.title, source_id=source.id, url=source.url)
@@ -218,6 +226,17 @@ class Researcher:
                     slots -= len(wave)
                 if len(state.sources) > before_sources:
                     eligible = [source.model_copy(deep=True) for source in state.sources if source.id not in state.extraction_completed and source.quality and source.quality.relevance >= mode.relevance_threshold]
+                    if quantitative_passes < 2 and not state.data_points and state.semantic_validation_required and any(any(char.isdigit() for char in source.content) for source in eligible):
+                        spare = getattr(self.llm, 'max_requests', float('inf')) - getattr(self.llm, 'requests_used', 0) - getattr(self.llm, 'reserved_final_calls', 0)
+                        if spare >= 2:
+                            quantitative_passes += 1
+                            emit('research_progress', 'Extracting source-backed numerical data', {'phase': 'evidence', 'progress': 35})
+                            numeric = await bounded_call(executor, deadline, self.extractor.extract_quantitative, state.question.refined_question or state.question.question, eligible)
+                            before_points = len(state.data_points)
+                            merge_extraction(state, ClaimExtraction(data_points=numeric.data_points))
+                            audit(state, 'data_extraction', 'Dedicated numerical pass completed', accepted=len(state.data_points) - before_points, proposed=len(numeric.data_points))
+                        else:
+                            audit(state, 'data_extraction', 'Numerical pass skipped to preserve evidence and final report budget')
                     strategy = f"\nStrategy: {mode.strategy}\nTarget claims: {state.question.target_claims}\nComparison items: {state.question.comparison_items}\nSub-questions: {tasks}. Set finding.sub_question_ids ONLY for questions the quoted evidence addresses.\nExisting claims: {[(c.id, c.claim) for c in state.findings]}. Use unique new claim IDs; reference existing dependencies as existing:C1, etc. Include depends_on only for logical prerequisites. Excerpts must be verbatim."
                     result = await bounded_call(executor, deadline, self.extractor.extract_evidence, state.question.question, eligible, strategy)
                     merge_extraction(state, result)
@@ -272,11 +291,11 @@ class Researcher:
                 follow_up_queries, targeted = [], []
                 if getattr(self.llm, "supports_task_routing", False) and gap_rounds < self.additional_research_rounds:
                     assessment = await bounded_call(executor, deadline, invoke_structured, self.llm,
-                        GAP_DETECTION.format(question=state.question.question, plan=state.plan, findings=state.findings) + f"\nCompleted queries: {state.searched_queries}",
+                        GAP_DETECTION.format(question=state.question.question, plan=state.plan, findings=state.findings) + f"\nCompleted queries: {state.searched_queries}\nMeasured evidence gaps: {gaps}",
                         GapAssessment, task=GAP_ANALYSIS)
                     follow_up_queries = assessment.follow_up_queries
                     unresolved_ids = {qid for _, _, ids in gaps for qid in ids}
-                    targeted = [(item.query, item.reason, [qid for qid in item.sub_question_ids if qid in unresolved_ids]) for item in assessment.targeted_queries]
+                    targeted = [(item.query, item.reason, [qid for qid in item.sub_question_ids if qid in unresolved_ids]) for item in sorted(assessment.targeted_queries, key=lambda item: {"high": 0, "medium": 1, "low": 2}[item.priority])]
                     targeted = [entry for entry in targeted if entry[2]]
                     gap_rounds += 1
                 # Rebuild the worklist exclusively from measured gaps. Unsearched tasks go first.

@@ -25,6 +25,13 @@ export function ResearchReport({ markdown, sources, onPreview, structured }: { m
   const [active, setActive] = useState(0);
   const [count, setCount] = useState(0);
   const article = useRef<HTMLElement>(null);
+  useEffect(() => {
+    let folded: HTMLDetailsElement[] = [];
+    const expand = () => { folded = Array.from(article.current?.querySelectorAll<HTMLDetailsElement>('.report-reading-notes:not([open])') || []); folded.forEach(item => { item.open = true; }); };
+    const restore = () => { folded.forEach(item => { item.open = false; }); folded = []; };
+    window.addEventListener('beforeprint', expand); window.addEventListener('afterprint', restore);
+    return () => { window.removeEventListener('beforeprint', expand); window.removeEventListener('afterprint', restore); };
+  }, []);
   const copyTimer = useRef<ReturnType<typeof setTimeout>>();
   useEffect(() => () => clearTimeout(copyTimer.current), []);
   const report = useMemo(() => structured?.sections.length ? structured : splitReport(markdown), [structured, markdown]);
@@ -33,6 +40,14 @@ export function ResearchReport({ markdown, sources, onPreview, structured }: { m
     if (item.section_id && sectionIds.has(item.section_id)) return item.section_id;
     const preferred = item.origin === "session" ? "methodology" : "comparison";
     return sectionIds.has(preferred) ? preferred : report.sections[report.sections.length - 1]?.id;
+  };
+  const readingContent = (content: string) => {
+    const notes: string[] = [];
+    const text = content.split(/\n\s*\n/).filter(paragraph => {
+      if (/^(Interpretive boundary:|The evidence trail for this assessment is reproduced below\.)/.test(paragraph)) { notes.push(paragraph); return false; }
+      return true;
+    }).join('\n\n');
+    return { text, notes: [...new Set(notes)] };
   };
   const linkedText = (text: string) => text.replace(/\[((?:S\d+|\d+)(?:\s*[,;]\s*(?:S\d+|\d+))*)\](?!\()/g, (_original, group: string) => group.split(/[,;]/).map((token) => {
     const id = token.trim();
@@ -65,7 +80,12 @@ export function ResearchReport({ markdown, sources, onPreview, structured }: { m
   useEffect(() => {
     const matches = article.current?.querySelectorAll("mark");
     matches?.forEach((mark, index) => mark.classList.toggle("report-match-current", index === active));
-    if (query.trim()) matches?.[active]?.scrollIntoView({ block: "center" });
+    if (query.trim()) {
+      const match = matches?.[active];
+      const details = match?.closest('details');
+      if (details) details.open = true;
+      match?.scrollIntoView({ block: 'center' });
+    }
   }, [active, count, query]);
   const download = () => {
     const url = URL.createObjectURL(new Blob([markdown], { type: "text/markdown;charset=utf-8" }));
@@ -104,7 +124,8 @@ export function ResearchReport({ markdown, sources, onPreview, structured }: { m
               const source = sources.find((item) => href === "#source-" + item.id);
               return source ? <Citation n={sources.indexOf(source) + 1} onClick={() => onPreview(source)} /> : <a href={href} target={href?.startsWith("#") ? undefined : "_blank"} rel="noreferrer">{children}</a>;
             },
-          }}>{linkedText(section.content)}</ReactMarkdown>
+          }}>{linkedText(readingContent(section.content).text)}</ReactMarkdown>
+          {readingContent(section.content).notes.length > 0 && <details className="report-reading-notes"><summary className="cursor-pointer text-sm text-muted-foreground">Evidence and interpretation notes</summary><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[highlight]}>{readingContent(section.content).notes.join('\n\n')}</ReactMarkdown></details>}
           {structured && <ReportVisuals charts={structured.charts.filter((item) => visualSection(item) === section.id)} tables={structured.tables.filter((item) => visualSection(item) === section.id)} sources={sources} onPreview={onPreview} />}
         </section>)}
         {structured && !structured.charts.length && !structured.tables.length && <p className="report-visual-status">No validated chart or table data was available for this research session. Visuals are shown only when the retrieved evidence contains traceable measurements or the research state contains quality/status data.</p>}
