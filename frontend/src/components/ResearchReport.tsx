@@ -99,7 +99,7 @@ export function ResearchReport({ markdown, sources, onPreview, structured }: { m
       clearTimeout(copyTimer.current); copyTimer.current = setTimeout(() => setCopied(false), 1800);
     } catch { setCopyError("Clipboard access failed. Download the Markdown report instead."); }
   };
-  return <section id="final-report" className="report-wrapper print-report" aria-label="Final research report">
+  return <section id="final-report" tabIndex={-1} className="report-wrapper print-report scroll-mt-24" aria-label="Final research report">
     <header className="report-toolbar no-print border-b border-border px-5 py-5 dark:border-border">
       <div className="flex flex-wrap items-baseline justify-between gap-3"><h2 className="text-lg font-medium">Research report</h2><p className="text-xs text-muted-foreground">{report.sections.length} sections · {sources.length} retrieved sources</p></div>
       <div className="mt-3 flex flex-wrap gap-2">
@@ -118,14 +118,14 @@ export function ResearchReport({ markdown, sources, onPreview, structured }: { m
         <h1 className="report-document-title">{report.title}</h1>
         {report.sections.map((section, index) => <section key={section.id} id={`report-${section.id}`} className="report-document-section" aria-labelledby={`report-heading-${section.id}`}>
           <h2 id={`report-heading-${section.id}`}><span className="report-section-number" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>{section.title}</h2>
-          <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[highlight]} components={{
+          <ReactMarkdown disallowedElements={['img']} remarkPlugins={[remarkGfm]} rehypePlugins={[highlight]} components={{
             table: ({ children }) => <div className="report-table-wrap" tabIndex={0} role="region" aria-label={`${section.title} table`}><table>{children}</table></div>,
             a: ({ href, children }) => {
               const source = sources.find((item) => href === "#source-" + item.id);
               return source ? <Citation n={sources.indexOf(source) + 1} onClick={() => onPreview(source)} /> : <a href={href} target={href?.startsWith("#") ? undefined : "_blank"} rel="noreferrer">{children}</a>;
             },
           }}>{linkedText(readingContent(section.content).text)}</ReactMarkdown>
-          {readingContent(section.content).notes.length > 0 && <details className="report-reading-notes"><summary className="cursor-pointer text-sm text-muted-foreground">Evidence and interpretation notes</summary><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[highlight]}>{readingContent(section.content).notes.join('\n\n')}</ReactMarkdown></details>}
+          {readingContent(section.content).notes.length > 0 && <details className="report-reading-notes"><summary className="cursor-pointer text-sm text-muted-foreground">Evidence and interpretation notes</summary><ReactMarkdown disallowedElements={['img']} remarkPlugins={[remarkGfm]} rehypePlugins={[highlight]}>{readingContent(section.content).notes.join('\n\n')}</ReactMarkdown></details>}
           {structured && <ReportVisuals charts={structured.charts.filter((item) => visualSection(item) === section.id)} tables={structured.tables.filter((item) => visualSection(item) === section.id)} sources={sources} onPreview={onPreview} />}
         </section>)}
         {structured && !structured.charts.length && !structured.tables.length && <p className="report-visual-status">No validated chart or table data was available for this research session. Visuals are shown only when the retrieved evidence contains traceable measurements or the research state contains quality/status data.</p>}

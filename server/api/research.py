@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ResearchJob:
+    review_future: asyncio.Future | None = None
+    review_token: str | None = None
+    review_gaps: set[str] = field(default_factory=set)
     parent_state: ResearchState | None = None
     owner_id: str | None = None
     queue: asyncio.Queue[dict[str, Any]] = field(default_factory=asyncio.Queue)
@@ -188,6 +191,36 @@ async def _run_job(research_id: str, request: ResearchRequest) -> None:
         agent = ResearchAgent(settings)
         job.agent = agent
         continuation = {'parent_state': job.parent_state, 'parent_research_id': request.parent_research_id} if job.parent_state else {}
+        if request.brief:
+            continuation['brief'] = request.brief
+        if request.review_checkpoint:
+            def review(state):
+                async def wait_review():
+                    job.review_token = uuid4().hex
+                    job.review_gaps = {gap.gap_id for gap in state.research_gaps}
+                    job.review_future = loop.create_future()
+                    enqueue('research_checkpoint', 'Review sources before the report is written', {
+                        'token': job.review_token, 'sources': [source.model_dump(exclude={'content'}) for source in state.sources],
+                        'gaps': [gap.model_dump() for gap in state.research_gaps],
+                        'canInvestigate': state.iteration < state.max_iterations and state.searches_performed < state.max_searches and len(state.sources) < state.max_sources and state.llm_requests_used < state.max_llm_requests - 2,
+                        'expiresInSeconds': 900})
+                    try:
+                        choices = await asyncio.wait_for(job.review_future, timeout=900)
+                        enqueue('checkpoint_resumed', 'Source review complete; research is continuing')
+                        return choices
+                    except asyncio.TimeoutError:
+                        enqueue('checkpoint_resumed', 'Review timed out; continuing with collected evidence')
+                        return []
+                    finally:
+                        job.review_future = None
+                        job.review_token = None
+                future = asyncio.run_coroutine_threadsafe(wait_review(), loop)
+                try:
+                    return future.result(timeout=920)
+                finally:
+                    if not future.done():
+                        future.cancel()
+            continuation['review_checkpoint'] = review
         state = await asyncio.to_thread(agent.run, request.question, emit, mode=job.mode, filters=request.filters,
             target_claims=request.target_claims, comparison_items=request.comparison_items, budgets=request.budgets, **continuation)
         job.state = state
@@ -197,8 +230,8 @@ async def _run_job(research_id: str, request: ResearchRequest) -> None:
         if job.agent and hasattr(job.agent.llm, "cancelled"):
             job.agent.llm.cancelled.set()
         enqueue("research_failed", "Research cancelled", {"error": job.error})
-    except Exception:
-        logger.exception("Research job %s failed", research_id)
+    except Exception as exc:
+        logger.error("Research job %s failed (%s)", research_id, type(exc).__name__)
         job.error = "The research service could not complete this request."
         enqueue("research_failed", "Research failed", {"error": job.error})
     finally:
@@ -274,6 +307,8 @@ def cancel_research(research_id):
         return False
     if not job.done and job.task:
         job.cancel_requested = True
+        if job.review_future and not job.review_future.done():
+            job.review_future.set_exception(RuntimeError('Research cancelled during source review'))
         if job.agent is not None:
             job.task.cancel()
     return True
@@ -422,12 +457,12 @@ def get_chat_documents(research_id: str) -> dict[str, Any]:
     return {"research_id": research_id, "documents": list(job.rag_index.documents.values())}
 
 
-async def stream_chat(research_id: str, request: AssistantRequest | ChatRequest) -> AsyncIterator[str]:
+async def stream_chat(research_id: str, request: AssistantRequest | ChatRequest, *, response_id: str | None = None) -> AsyncIterator[str]:
     job = assistant_job(research_id, request)
     queue = asyncio.Queue()
 
     def emit(kind, message, data=None):
-        queue.put_nowait(_event(kind, message, data, research_id=research_id, stage="chat"))
+        queue.put_nowait(_event(kind, message, data, research_id=response_id or research_id, stage="chat"))
 
     async def generate():
         try:
@@ -439,8 +474,8 @@ async def stream_chat(research_id: str, request: AssistantRequest | ChatRequest)
                     emit(kind, "Answer complete" if kind == "chat_complete" else "Generating answer", data)
         except asyncio.CancelledError:
             raise
-        except Exception:
-            logger.exception("Chat stream failed for %s", research_id)
+        except Exception as exc:
+            logger.error("Chat stream failed for %s (%s)", research_id, type(exc).__name__)
             emit("chat_error", "The research assistant is temporarily unavailable.")
 
     task = asyncio.create_task(generate())

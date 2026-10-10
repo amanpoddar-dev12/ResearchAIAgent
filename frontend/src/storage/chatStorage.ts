@@ -3,7 +3,7 @@ import type { PDFDocument } from "../rag/pdfRetrieval";
 import { cloudEnabled, cloudRequest, cloudSave, cloudDelete } from '../services/cloud';
 import { storageScope } from '../services/auth';
 export interface ChatMessage { id: string; role: "user" | "assistant"; content: string; citations: ChatCitation[]; limitations: string[]; pdfName?: string; complete?: boolean }
-export interface ChatRecord { id: string; title: string; updatedAt: string; messages: ChatMessage[]; draft: string; state: ResearchState | null; pdfName?: string }
+export interface ChatRecord { id: string; title: string; updatedAt: string; messages: ChatMessage[]; draft: string; state: ResearchState | null; pdfName?: string; collectionId?: string }
 export function createChat(state: ResearchState | null): ChatRecord {
   return { id: `general-chat-${crypto.randomUUID()}`, title: 'New conversation', updatedAt: new Date().toISOString(), messages: [], draft: '', state };
 }

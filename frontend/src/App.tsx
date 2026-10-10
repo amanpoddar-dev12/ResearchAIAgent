@@ -3,6 +3,7 @@ import { supabase } from "./services/auth";
 import { entryPage } from "./ui/entryRoute";
 const ResearchPage = lazy(() => import("./pages/ResearchPage").then(module => ({ default: module.ResearchPage })));
 const LandingPage = lazy(() => import("./pages/LandingPage"));
+const SharedReportPage = lazy(() => import('./pages/SharedReportPage'));
 export default function App() {
   const [ready, setReady] = useState(!supabase);
   const [signedIn, setSignedIn] = useState(false);
@@ -28,6 +29,8 @@ export default function App() {
     }
   }, [ready, signedIn, path]);
   const loading = <p className="p-6 text-muted-foreground" role="status">Opening workspace…</p>;
+  const shared = path.match(/^\/share\/([A-Za-z0-9_-]{43})\/?$/);
+  if (shared) return <Suspense fallback={loading}><SharedReportPage token={shared[1]} /></Suspense>;
   if (!ready) return loading;
   return <Suspense fallback={loading}>{entryPage(path, signedIn) === "landing" ? <LandingPage /> : <ResearchPage />}</Suspense>;
 }

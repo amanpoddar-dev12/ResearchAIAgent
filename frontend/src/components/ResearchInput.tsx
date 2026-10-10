@@ -1,4 +1,5 @@
 import { ResearchCompanion } from "./ResearchCompanion";
+import { ResearchBrief, type Brief } from './ResearchBrief';
 import { modeHelp, usefulIdea } from '../ui/researchPresentation';
 import { useEffect, useState } from "react";
 import { freshResearchIdeas, loadResearchIdeas, randomIdeas } from "../services/researchIdeas";
@@ -7,6 +8,8 @@ import { modes, sourceTypes } from "../types/research";
 import type { ResearchMode, SourceFilters, ResearchBudgets } from "../types/research";
 
 interface Props {
+  reviewCheckpoint: boolean; setReviewCheckpoint: (value: boolean) => void;
+  brief: Brief; setBrief: (value: Brief) => void;
   value: string; setValue: (value: string) => void;
   mode: ResearchMode; setMode: (mode: ResearchMode) => void;
   maxSources: number; setMaxSources: (value: number) => void;
@@ -20,7 +23,7 @@ function ideaLabel(question: string): string {
   const words = topic.split(/\s+/);
   return words.length > 7 ? `${words.slice(0,7).join(" ")}…` : topic;
 }
-export function ResearchInput({ value, setValue, mode, setMode, maxSources, setMaxSources, filters, setFilters, targets, setTargets, disabled, onSubmit, budgets, setBudgets }: Props) {
+export function ResearchInput({ value, setValue, mode, setMode, maxSources, setMaxSources, filters, setFilters, targets, setTargets, disabled, onSubmit, budgets, setBudgets, brief, setBrief, reviewCheckpoint, setReviewCheckpoint }: Props) {
   const [ideas, setIdeas] = useState(() => randomIdeas(freshResearchIdeas()));
   useEffect(() => {
     let active = true;
@@ -47,6 +50,8 @@ export function ResearchInput({ value, setValue, mode, setMode, maxSources, setM
 
         </div>
         <p className="text-xs text-muted-foreground">{modeHelp[mode]}</p>
+        <ResearchBrief value={brief} onChange={setBrief} />
+        <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={reviewCheckpoint} onChange={event => setReviewCheckpoint(event.target.checked)} />Review sources before writing the report</label>
         {(mode === "fact_check" || mode === "compare") && <label className="block text-sm">{mode === "compare" ? "Items to compare (one per line, 2–6)" : "Specific claims to verify (one per line, up to 10; defaults to your question)"}<textarea aria-label={mode === "compare" ? "Items to compare" : "Claims to verify"} rows={3} value={targets} onChange={(event) => setTargets(event.target.value)} className="mt-2 w-full rounded-lg border border-border bg-transparent p-3 dark:border-border" /></label>}
         <details className="rounded-xl border border-border p-3 dark:border-border"><summary className="cursor-pointer text-sm font-medium">Advanced settings</summary><div className="mt-3">          <label className="block text-xs">Maximum sources<input aria-label="Maximum sources" type="number" min={1} max={100} value={budgets.max_sources ?? maxSources} onChange={event => { if (!event.target.value) { setBudgets({ ...budgets, max_sources: undefined }); return; } const count = Number(event.target.value); setBudgets({ ...budgets, max_sources: count }); setMaxSources(Math.max(1, Math.min(20, count))); }} className="select mt-1 block w-full" /></label><p className="mt-2 text-xs text-muted-foreground">This is a requested upper limit. Server limits may reduce it; the final report shows the effective budget.</p></div>
         <details className="mt-3">

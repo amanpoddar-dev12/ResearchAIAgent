@@ -1,3 +1,10 @@
+import "../workspace.css";
+import { emptyBrief } from '../components/ResearchBrief';
+import { VersionComparison } from '../components/VersionComparison';
+import { ReportFeedback } from '../components/ReportFeedback';
+import { ShareReport } from '../components/ShareReport';
+import { ResearchCheckpoint } from '../components/ResearchCheckpoint';
+import { ResearchLibrary } from '../components/ResearchLibrary';
 import { gapLabel } from '../ui/researchPresentation';
 import { cloudEnabled } from '../services/auth';
 import { useTheme } from "../theme";
@@ -33,8 +40,10 @@ import { deleteSavedResearch, clearSavedResearch, listSavedResearch, saveResearc
 import { citationCoverage, evidenceCount, highQualitySources, relevantSources, researchCoverage, verifiedClaims } from "../scoring/metrics";
 export function ResearchPage() {
   const [generalChatId] = useState(getGeneralChatId);
-  const [activeTab, setActiveTab] = useState<"research" | "assistant">("research");
+  const [activeTab, setActiveTab] = useState<"research" | "assistant" | "library">("research");
   const [question, setQuestion] = useState("");
+  const [brief, setBrief] = useState(emptyBrief);
+  const [reviewCheckpoint, setReviewCheckpoint] = useState(false);
   const [mode, setMode] = useState<ResearchMode>("quick");
   const [maxSources, setMaxSources] = useState(10);
   const [budgets, setBudgets] = useState<ResearchBudgets>({});
@@ -43,7 +52,7 @@ export function ResearchPage() {
   const [session, dispatch] = useReducer(researchReducer, initialResearchSession);
   const [preview, setPreview] = useState<ResearchSource | null>(null);
   const { theme, setTheme, dark, cycleTheme } = useTheme();
-  const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia("(min-width: 768px)").matches);
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia("(min-width: 1024px)").matches);
   const [elapsed, setElapsed] = useState(0);
   const [saved, setSaved] = useState<SavedResearch[]>([]);
   const [storageError, setStorageError] = useState("");
@@ -52,8 +61,23 @@ export function ResearchPage() {
   const cleanup = useRef<(() => void) | null>(null);
   const generation = useRef(0);
   const savedSessionId = useRef<string | null>(null);
+  const reportNavigated = useRef(false);
   const status: ResearchStatus = session.status;
   const snapshot = session.snapshot;
+  useEffect(() => {
+    if (status !== "completed") { reportNavigated.current = false; return; }
+    if (!session.report || restoredResearchId || reportNavigated.current) return;
+    if (activeTab !== "research") { setActiveTab("research"); return; }
+    const frame = requestAnimationFrame(() => {
+      const report = document.getElementById("final-report");
+      if (!report) return;
+      reportNavigated.current = true;
+      window.location.hash = "final-report";
+      report.focus({ preventScroll: true });
+      report.scrollIntoView({ block: "start", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [status, session.report, restoredResearchId, activeTab]);
   useEffect(() => () => { generation.current++; cleanup.current?.(); }, []);
   useEffect(() => {
     if (status !== "researching") return;
@@ -63,7 +87,7 @@ export function ResearchPage() {
   }, [status]);
   useEffect(() => {
     listSavedResearch().then(setSaved).catch((error) => setStorageError(error.message || 'Saved research could not be loaded.'));
-    const closeSidebar = () => { if (window.matchMedia("(max-width: 767px)").matches) setSidebarOpen(false); };
+    const closeSidebar = () => { if (window.matchMedia("(max-width: 1023px)").matches) setSidebarOpen(false); };
     const escape = (event: KeyboardEvent) => { if (event.key === "Escape") closeSidebar(); };
     window.addEventListener("hashchange", closeSidebar);
     document.addEventListener("keydown", escape);
@@ -101,9 +125,12 @@ export function ResearchPage() {
   };
   const reset = () => {
     setContinuationParent(null);
+    setBrief(emptyBrief());
+    setReviewCheckpoint(false);
     clearResults(); window.scrollTo({ top: 0, behavior: 'auto' }); savedSessionId.current = null; setQuestion(""); setTargets(""); setFilters(emptyFilters()); setMode("quick"); setMaxSources(10); setBudgets({});
   };
   const openSaved = (item: SavedResearch) => {
+    setBrief({ ...emptyBrief(), ...item.state.brief });
     setContinuationParent(null);
     cleanup.current?.(); cleanup.current = null; generation.current++;
     savedSessionId.current = item.id;
@@ -129,7 +156,7 @@ export function ResearchPage() {
     dispatch({ type: "research_started", message: "Starting research", timestamp: new Date().toISOString() });
     const items = targets.split("\n").map((item) => item.trim()).filter(Boolean);
     try {
-      const id = await startResearch({ question: question.trim(), depth: mode === "quick" ? "quick" : "deep", mode, max_sources: maxSources, filters, budgets,
+      const id = await startResearch({ question: question.trim(), brief, review_checkpoint: reviewCheckpoint, depth: mode === "quick" ? "quick" : "deep", mode, max_sources: maxSources, filters, budgets,
         target_claims: mode === "fact_check" ? items : [], comparison_items: mode === "compare" ? items : [], ...(continuationParent ? { parent_research_id: continuationParent } : {}) });
       setContinuationParent(null);
       if (generation.current !== current) { void cancelResearch(id).catch(() => {}); return; }
@@ -155,12 +182,13 @@ export function ResearchPage() {
     window.location.hash = 'main-content';
   };
   return <div className="app-shell min-h-screen">
-    <Sidebar open={sidebarOpen} onClose={() => { if (window.matchMedia("(max-width: 767px)").matches) setSidebarOpen(false); }} onNew={reset} saved={saved} onOpenSaved={openSaved} onRenameSaved={renameSaved} onDeleteSaved={removeSaved} onClearSaved={clearSaved} activeView={activeTab} onViewChange={setActiveTab} theme={theme} onTheme={setTheme} />
-    <div className={sidebarOpen ? "md:pl-[260px]" : ""}>
+    <Sidebar open={sidebarOpen} onClose={() => { if (window.matchMedia("(max-width: 1023px)").matches) setSidebarOpen(false); }} onNew={reset} saved={saved} onOpenSaved={openSaved} onRenameSaved={renameSaved} onDeleteSaved={removeSaved} onClearSaved={clearSaved} activeView={activeTab} onViewChange={setActiveTab} theme={theme} onTheme={setTheme} />
+    <div className={sidebarOpen ? "lg:pl-[260px]" : ""}>
       <Header dark={dark} onTheme={cycleTheme} onNew={reset} onMenu={() => setSidebarOpen((open) => !open)} status={status === "completed" ? snapshot?.completion_quality === "partial" ? "Evidence incomplete" : "Finished" : status} mode={mode} />
       <main id="main-content" className={`mx-auto max-w-7xl overflow-x-hidden px-6 py-8 lg:px-8 ${activeTab === "assistant" ? "assistant-workspace" : ""}`}>
-        {(activeTab === "assistant" || status !== "idle") && <div className="mb-8 flex flex-wrap items-end justify-between gap-4 no-print">
-          <div><p className="eyebrow">{activeTab === "assistant" ? "Research Assistant" : "Research workspace"}</p><h1 className="mt-2 text-2xl font-medium tracking-tight sm:text-3xl">{activeTab === "assistant" ? "Chat with your assistant" : snapshot?.question.refined_question || question || "Start with a research question"}</h1></div>
+        {activeTab === 'library' && <ResearchLibrary saved={saved} onOpen={openSaved} onPreview={setPreview} />}
+        {activeTab !== "library" && (activeTab === "assistant" || status !== "idle") && <div className="mb-8 flex flex-wrap items-end justify-between gap-4 no-print">
+          <div><p className="eyebrow">{activeTab === "assistant" ? "Research Assistant" : "Research workspace"}</p><h1 className="mt-2 text-2xl font-medium tracking-tight sm:text-3xl">{activeTab === "assistant" ? "Your research, in conversation" : snapshot?.question.refined_question || question || "Start with a research question"}</h1></div>
           {activeTab === "research" && status !== "idle" && <span className={`badge ${status === "error" ? "badge-error" : status === "completed" ? snapshot?.completion_quality === "partial" ? "badge-error" : "badge-success" : "badge-indigo"}`} role="status">{status === "researching" ? "Live research" : status === "completed" ? snapshot?.completion_quality === "partial" ? "Finished · Evidence incomplete" : "Finished" : status}</span>}
         </div>}
         <div className={activeTab === "research" ? "" : "hidden print:block"}>
@@ -168,8 +196,9 @@ export function ResearchPage() {
         {continuationParent && <p className="mb-4 text-sm text-muted-foreground" role="status">Continuing a saved report. This run will save a separate version with its own evidence.<button className="ml-2 underline" onClick={() => setContinuationParent(null)}>Start independently</button></p>}
         {status === "completed" && researchId && <section className="card mb-6 no-print" aria-label="Continue saved research"><h2 className="section-title">Continue research</h2><p className="mt-2 text-sm text-muted-foreground">Investigate a follow-up or evidence gap. The original report stays saved.</p><button className="button-secondary mt-3" onClick={() => prepareContinuation(`Update the research on: ${snapshot?.question.question || question}. Investigate new primary evidence and unresolved questions.`)}>Update this research</button>{snapshot?.research_gaps?.filter((gap, index, all) => all.findIndex(other => gapLabel(other) === gapLabel(gap)) === index).slice(0, 3).map((gap) => <button key={gap.gap_id} className="chip mt-3 ml-2 text-left" onClick={() => prepareContinuation(`For the research on ${snapshot.question.question}, investigate this evidence gap: ${gap.description}. Search focus: ${gap.recommended_search}`)} title={gap.description}>{gapLabel(gap)}</button>)}</section>}
         {snapshot?.parent_research_id && <p className="mb-4 text-sm text-muted-foreground no-print">Continued research · <button className="underline" onClick={() => { const parent = saved.find((item) => item.id === snapshot.parent_research_id); if (parent) openSaved(parent); else setStorageError('The original report is no longer available in this workspace.'); }}>Open original report</button></p>}
-        {status === "idle" ? <><ResearchInput value={question} setValue={setQuestion} mode={mode} setMode={setMode} maxSources={maxSources} setMaxSources={setMaxSources} filters={filters} setFilters={setFilters} targets={targets} setTargets={setTargets} disabled={false} onSubmit={run} budgets={budgets} setBudgets={setBudgets} /><EmptyState /></> :
+        {status === "idle" ? <><ResearchInput reviewCheckpoint={reviewCheckpoint} setReviewCheckpoint={setReviewCheckpoint} brief={brief} setBrief={setBrief} value={question} setValue={setQuestion} mode={mode} setMode={setMode} maxSources={maxSources} setMaxSources={setMaxSources} filters={filters} setFilters={setFilters} targets={targets} setTargets={setTargets} disabled={false} onSubmit={run} budgets={budgets} setBudgets={setBudgets} /><EmptyState /></> :
           <div className="research-results grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,380px)]">
+            {status === 'researching' && <ResearchCheckpoint events={session.events} onPreview={setPreview} />}
             {status === "completed" && <div className="report-full-width no-print"><p className="text-sm text-muted-foreground">{restoredResearchId ? `Saved report · ${new Date(saved.find(item => item.id === restoredResearchId)?.savedAt || Date.now()).toLocaleDateString()}` : "Research finished"}</p>{snapshot?.completion_quality === "partial" && <p role="status" className="mt-2 text-sm text-warning">The evidence is incomplete. Review the limitations or continue researching a gap before relying on the conclusions.</p>}</div>}
             {session.report && <div className="report-full-width"><ResearchReport markdown={session.report} structured={snapshot?.structured_report} sources={session.sources} onPreview={setPreview} /></div>}
             <details className="report-full-width research-diagnostics no-print" open={status !== "completed"}><summary className="cursor-pointer rounded-xl border border-border p-4 text-sm font-medium">Evidence, sources &amp; research diagnostics</summary><div className="mt-6 grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,380px)]">
@@ -205,12 +234,15 @@ export function ResearchPage() {
             </div>
             <aside className="min-w-0 space-y-6 no-print"><SourceList sources={session.sources} conflicts={session.conflicts} onPreview={setPreview} />{snapshot?.audit_log && <AuditView entries={snapshot.audit_log} />}{!restoredResearchId && <ActivityLog events={session.events} />}</aside></div></details>
             <div className="report-support-panels report-full-width no-print">
+              {researchId && session.report && <ShareReport key={researchId} researchId={researchId} />}
+              {researchId && session.report && <ReportFeedback key={researchId} researchId={researchId} sections={snapshot?.structured_report?.sections || []} />}
+              {snapshot && researchId && session.report && <VersionComparison key={researchId} current={toSavedResearch(researchId, question, mode, session.report, snapshot)} saved={saved} />}
               {snapshot && <details className="report-support-panel"><summary>Research insights</summary><ResearchInsights state={snapshot} findings={session.findings} /></details>}
               {snapshot && <details className="card"><summary className="cursor-pointer text-sm font-medium">Citation validation log ({snapshot.citation_rejections?.length || 0})</summary>{snapshot.citation_rejections?.length ? <ul className="mt-4 space-y-3 text-sm">{snapshot.citation_rejections.map((item, index) => <li key={index}><strong>{item.claim_id}</strong> · {item.source_id || item.evidence_id || "Report"}<p className="mt-1 text-muted-foreground">{item.reason}</p></li>)}</ul> : <p className="mt-3 text-sm text-muted-foreground">No citations have been rejected in this session.</p>}</details>}
             </div>
           </div>}
         </div>
-        <section className="no-print"><ResearchChat key={snapshot && researchId ? researchId : generalChatId} researchId={snapshot && researchId ? researchId : generalChatId} state={snapshot && researchId ? snapshot : null} findings={session.findings} evidence={session.evidence} sources={session.sources} onPreview={setPreview} embedded={activeTab === "assistant"} /></section>
+        {activeTab !== 'library' && <section className="no-print"><ResearchChat key={snapshot && researchId ? researchId : generalChatId} researchId={snapshot && researchId ? researchId : generalChatId} state={snapshot && researchId ? snapshot : null} findings={session.findings} evidence={session.evidence} sources={session.sources} onPreview={setPreview} embedded={activeTab === "assistant"} /></section>}
         {storageError && <p className="no-print mt-4 text-sm text-warning" role="alert">{storageError}</p>}
         <footer className="mx-auto mt-12 max-w-3xl border-t border-border py-8 text-center dark:border-border no-print"><p className="text-xs text-muted-foreground">{cloudEnabled ? 'Private workspace. Research and documents are saved until you delete them.' : 'Session-scoped research. Saved reports stay in this browser only.'}</p></footer>
       </main>

@@ -1,0 +1,11 @@
+import { useState } from 'react';
+import { saveProductivity, type ReportFeedback as Feedback } from '../storage/productivityStorage';
+export function ReportFeedback({ researchId, sections }: { researchId: string; sections: { id: string; title: string }[] }) {
+  const [section, setSection] = useState('report');
+  const [category, setCategory] = useState<Feedback['category']>('Helpful');
+  const [note, setNote] = useState('');
+  const [status, setStatus] = useState('');
+  const [busy, setBusy] = useState(false);
+  const submit = async () => { setBusy(true); setStatus(''); try { await saveProductivity('feedback', { id: crypto.randomUUID(), researchId, section, category, note: note.trim(), createdAt: new Date().toISOString() }); setStatus('Feedback saved in your workspace. It is not emailed automatically.'); setNote(''); } catch { setStatus('Feedback could not be saved. Your note is still here; retry.'); } finally { setBusy(false); } };
+  return <details className="card no-print"><summary className="cursor-pointer text-sm font-medium">Report feedback</summary><div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="text-xs">Section<select className="select mt-1 w-full" value={section} onChange={event => setSection(event.target.value)}><option value="report">Whole report</option>{sections.map(item => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label><label className="text-xs">Feedback type<select className="select mt-1 w-full" value={category} onChange={event => setCategory(event.target.value as Feedback['category'])}>{['Helpful', 'Missing information', 'Citation issue'].map(item => <option key={item}>{item}</option>)}</select></label></div><label className="mt-3 block text-xs">Details<textarea className="select mt-1 w-full" maxLength={2000} rows={3} value={note} onChange={event => setNote(event.target.value)} placeholder="Which finding or citation needs attention?" /></label><button className="button-secondary mt-3" disabled={busy || category !== 'Helpful' && !note.trim()} onClick={() => void submit()}>{busy ? 'Saving…' : 'Save feedback'}</button><p role="status" className="mt-2 text-xs text-muted-foreground">{status}</p></details>;
+}

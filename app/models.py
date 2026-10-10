@@ -346,6 +346,7 @@ class StructuredReport(BaseModel):
 
 
 class ResearchState(BaseModel):
+    brief: dict[str, str] = Field(default_factory=dict)
     parent_research_id: str | None = None
     version_changes: list[str] = Field(default_factory=list)
     question: ResearchQuestion

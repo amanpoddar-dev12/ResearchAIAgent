@@ -1,0 +1,82 @@
+/* Workspace presentation only; landing and print layouts are intentionally separate. */
+@media screen {
+ .app-shell .report-document { max-width: none; }
+ .app-shell .report-document-section > p, .app-shell .report-document-section > ul, .app-shell .report-document-section > ol, .app-shell .report-document-section > blockquote { max-width: 78ch; }
+ .source-excerpt { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+ .source-explorer-list .source-item { padding: 16px; border: 1px solid hsl(var(--border)); border-radius: 12px; }
+ .app-shell #main-content { max-width: 1200px; padding: 32px; }
+ .app-shell .sidebar { padding: 22px 16px 16px; }
+ .app-shell .sidebar-link { min-height: 42px; padding: 10px 12px; }
+ .app-shell .sidebar-link[aria-current] { border-left: 0; background: hsl(var(--primary) / .1); color: hsl(var(--foreground)); }
+ .app-shell .card { padding: 22px; border-radius: 16px; box-shadow: none; }
+ .app-shell .section-title { gap: 10px; }
+ .app-shell .research-input { max-width: 760px; padding-top: 24px; }
+ .app-shell .research-input > div:first-child { margin-bottom: 28px; }
+ .app-shell .research-input h1 { font-size: clamp(32px, 4vw, 46px); line-height: 1.12; }
+ .app-shell .research-input form { padding: 24px; border-radius: 18px; }
+ .app-shell #research-question { min-height: 132px; border-radius: 14px; background: hsl(var(--background)); line-height: 1.7; font-size: 16px; }
+ .app-shell .research-input fieldset > .button-primary { min-height: 44px; padding-left: 24px; padding-right: 24px; }
+ .app-shell .assistant-workspace { max-width: 1040px !important; }
+ .app-shell .assistant-workspace > div:first-child { margin-bottom: 20px; }
+ .app-shell .assistant-workspace h1 { font-size: 28px; }
+ .app-shell #research-chat-panel { padding: 18px; border-radius: 18px; }
+ .app-shell .chat-workspace-panel { height: min(760px, calc(100dvh - 220px)); min-height: 440px; max-height: none; }
+ .app-shell .chat-panel { width: min(460px, calc(100vw - 32px)); height: min(720px, calc(var(--chat-viewport-height, 100dvh) - 40px)); max-height: calc(var(--chat-viewport-height, 100dvh) - 40px); }
+ .app-shell .chat-header { margin: -18px -18px 0; padding: 16px 18px; align-items: center; }
+ .app-shell .chat-header h2 { font-family: Inter, sans-serif; font-size: 16px !important; }
+ .app-shell .chat-header > div:first-child > p { max-width: 280px; font-size: 12px; }
+ .app-shell .chat-header .button-secondary { border: 0; background: hsl(var(--muted)); min-height: 40px; padding: 8px 12px; }
+ .app-shell .chat-context { border: 0; padding: 6px 0; margin-top: 8px; }
+ .app-shell .chat-context summary { color: hsl(var(--muted-foreground)); }
+ .app-shell .chat-tools { margin-top: 4px; padding: 7px 10px; background: hsl(var(--background)); border-radius: 10px; }
+ .app-shell .chat-tools[open] { max-height: 220px; }
+ .app-shell .chat-messages { flex: 1; min-height: 0; padding: 18px 2px 12px; margin-top: 8px; overflow-y: auto; }
+ .app-shell .chat-message { max-width: 90%; padding: 14px 16px; margin-bottom: 16px; box-shadow: none; overflow-wrap: anywhere; }
+ .app-shell .chat-user { margin-left: auto; background: hsl(var(--muted)); border: 0; border-radius: 16px 16px 4px 16px; }
+ .app-shell .chat-assistant { margin-right: auto; background: transparent; border: 0; padding-left: 4px; }
+ .app-shell .chat-assistant > p { line-height: 1.85; }
+ .app-shell .chat-messages > div:first-child > div { display: grid; grid-template-columns: 1fr; }
+ .app-shell .chat-messages .chip { background: hsl(var(--background)); border-radius: 10px; padding: 10px 12px; line-height: 1.5; }
+ .app-shell .chat-composer { padding: 8px; border: 1px solid hsl(var(--border)); border-radius: 16px; background: hsl(var(--background)); align-items: flex-end; }
+ .app-shell .chat-composer .chat-input { border: 0; background: transparent; box-shadow: none; outline: none; padding: 8px 4px; min-width: 0; }
+ .app-shell .chat-composer:focus-within { outline: 2px solid hsl(var(--accent) / .3); outline-offset: 2px; }
+ .app-shell .chat-composer .button-primary { min-width: 40px; min-height: 40px; border-radius: 12px; padding: 8px; }
+ .app-shell .research-companion-compact { margin-top: 0; }
+ .app-shell .research-companion-compact .research-pet-playground { height: 34px; }
+ .app-shell .research-companion-compact .research-pet-playground .research-pet { width: 32px; height: 32px; }
+ .app-shell .chat-launcher { border-radius: 30px; min-height: 48px; }
+}
+@media screen and (max-width: 1023px) {
+ .app-shell .drawer-backdrop { display: block; }
+ .app-shell .drawer-backdrop.hidden { display: none; }
+}
+@media print {
+ .app-shell #main-content > :not(.print\:block), .research-results > :not(.report-full-width), .research-results > .no-print { display: none !important; }
+ .app-shell, .app-shell > div, #main-content, .research-results { padding: 0 !important; margin: 0 !important; width: 100% !important; overflow: visible !important; }
+ .report-document { width: 100% !important; }
+}
+@media screen and (max-width: 767px) {
+ .app-shell #main-content { padding: 20px 16px !important; }
+ .app-shell .card { padding: 16px; border-radius: 14px; }
+ .app-shell .research-input { padding-top: 14px; }
+ .app-shell .research-input form { padding: 16px; }
+ .app-shell .research-input h1 { font-size: 32px; }
+ .app-shell #research-question { min-height: 120px; }
+ .app-shell .research-input fieldset > .button-primary { width: 100%; justify-content: center; }
+ .app-shell .assistant-workspace > div:first-child { margin-bottom: 12px; }
+ .app-shell .assistant-workspace h1 { font-size: 23px; }
+ .app-shell #research-chat-panel { padding: 12px; }
+ .app-shell .chat-header { margin: -12px -12px 0; padding: 12px; }
+ .app-shell .chat-header h2 { font-size: 15px !important; }
+ .app-shell .chat-header > div:first-child > p { max-width: 180px; }
+ .app-shell .chat-header > div:first-child > div > span { display: none; }
+ .app-shell .chat-header .button-secondary { min-height: 44px; }
+ .app-shell .chat-workspace-panel, .app-shell #research-chat-panel:not(.chat-panel) { height: calc(var(--chat-viewport-height, 100dvh) - 130px); min-height: 300px; max-height: none; }
+ .app-shell .chat-panel { left: 8px; right: 8px; width: calc(100vw - 16px); bottom: calc(var(--chat-keyboard-offset, 0px) + 8px); height: calc(var(--chat-viewport-height, 100dvh) - 16px); max-height: calc(var(--chat-viewport-height, 100dvh) - 16px); }
+ .app-shell .chat-message { max-width: 96%; padding: 12px; }
+ .app-shell .chat-assistant { padding-left: 2px; }
+ .app-shell .chat-context summary, .app-shell .chat-tools summary { min-height: 44px; display: flex; align-items: center; }
+ .app-shell .chat-composer { padding: 6px; }
+ .app-shell .chat-panel > p:last-child, .app-shell .chat-workspace-panel > p:last-child { display: none; }
+ .app-shell .chat-launcher { bottom: 14px; right: 14px; padding: 12px 16px; }
+}

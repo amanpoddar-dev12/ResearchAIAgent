@@ -1,4 +1,5 @@
 import { ThemeControl } from "./ThemeControl";
+import { InfoPopover } from "./InfoPopover";
 import { useEffect, useState } from "react";
 import type { Theme } from "../theme";
 import { BookOpen, FileCheck2, FileText, Gauge, ListChecks, MessageCircle, Plus, Settings2, ShieldAlert, BrainCircuit, UserRound, X } from "lucide-react";
@@ -10,7 +11,7 @@ const groups = [
   { title: "Evidence", items: [["Sources", BookOpen, "#sources"], ["Findings", ListChecks, "#findings"], ["Evidence", FileCheck2, "#evidence"], ["Conflicts", ShieldAlert, "#conflicts"]] },
   { title: "Report", items: [["Final Report", FileText, "#final-report"]] },
 ] as const;
-export function Sidebar({ open, onClose, onNew, saved, onOpenSaved, onRenameSaved, onDeleteSaved, onClearSaved, activeView, onViewChange, theme, onTheme }: { open: boolean; onClose: () => void; onNew: () => void; saved: SavedResearch[]; onOpenSaved: (item: SavedResearch) => void; onRenameSaved: (item: SavedResearch) => void; onDeleteSaved: (id: string) => void; onClearSaved: () => void; activeView: "research" | "assistant"; onViewChange: (view: "research" | "assistant") => void; theme: Theme; onTheme: (theme: Theme) => void }) {
+export function Sidebar({ open, onClose, onNew, saved, onOpenSaved, onRenameSaved, onDeleteSaved, onClearSaved, activeView, onViewChange, theme, onTheme }: { open: boolean; onClose: () => void; onNew: () => void; saved: SavedResearch[]; onOpenSaved: (item: SavedResearch) => void; onRenameSaved: (item: SavedResearch) => void; onDeleteSaved: (id: string) => void; onClearSaved: () => void; activeView: "research" | "assistant" | "library"; onViewChange: (view: "research" | "assistant" | "library") => void; theme: Theme; onTheme: (theme: Theme) => void }) {
   const [savedQuery, setSavedQuery] = useState("");
   const rootId = (item: SavedResearch) => {
     const seen = new Set<string>(); let current = item;
@@ -30,10 +31,10 @@ export function Sidebar({ open, onClose, onNew, saved, onOpenSaved, onRenameSave
   useEffect(() => { const update = () => setSection(window.location.hash || "#main-content"); window.addEventListener("hashchange", update); return () => window.removeEventListener("hashchange", update); }, []);
   return <><button aria-label="Close navigation" className={`drawer-backdrop ${open ? "block" : "hidden"}`} onClick={onClose} />
     <aside className={`sidebar no-print ${open ? "translate-x-0" : "-translate-x-full"}`} aria-label="Research navigation">
-      <div className="flex items-center justify-between"><div className="flex items-center gap-2"><span className="app-mark"><BrainCircuit size={24} /></span><span className="font-medium">FindingsAI</span></div><button className="icon-button md:hidden" onClick={onClose} aria-label="Close navigation"><X size={18} /></button></div>
+      <div className="flex items-center justify-between"><div className="flex items-center gap-2"><span className="app-mark"><BrainCircuit size={24} /></span><span className="font-medium">FindingsAI</span></div><button className="icon-button lg:hidden" onClick={onClose} aria-label="Close navigation"><X size={18} /></button></div>
       <button className="button-primary mt-7 w-full justify-center" onClick={() => { onNew(); onClose(); }}><Plus size={16} /> New Research</button>
       <div className="sidebar-content min-h-0 flex-1 overflow-y-auto">
-      <nav className="mt-5 space-y-4" aria-label="Research sections">{groups.map((group) => <section key={group.title}><p className="eyebrow mb-2 px-3">{group.title}</p><div className="space-y-1">{group.items.map(([label, Icon, href]) => <a key={label} href={href} className="sidebar-link" onClick={() => { onViewChange("research"); onClose(); }} aria-current={activeView === "research" && section === href ? "location" : undefined}><Icon size={18} />{label}</a>)}{group.title === "Research" && <button type="button" className="sidebar-link w-full" aria-current={activeView === "assistant" ? "page" : undefined} onClick={() => { onViewChange("assistant"); onClose(); }}><MessageCircle size={18} />Research Assistant</button>}</div></section>)}</nav>
+      <button className="sidebar-link mt-4 w-full" aria-current={activeView === "library" ? "page" : undefined} onClick={() => { onViewChange("library"); onClose(); }}><BookOpen size={18} />Research library</button><nav className="mt-5 space-y-4" aria-label="Research sections">{groups.map((group) => <section key={group.title}><p className="eyebrow mb-2 px-3">{group.title}</p><div className="space-y-1">{group.items.map(([label, Icon, href]) => <a key={label} href={href} className="sidebar-link" onClick={() => { onViewChange("research"); onClose(); }} aria-current={activeView === "research" && section === href ? "location" : undefined}><Icon size={18} />{label}</a>)}{group.title === "Research" && <button type="button" className="sidebar-link w-full" aria-current={activeView === "assistant" ? "page" : undefined} onClick={() => { onViewChange("assistant"); onClose(); }}><MessageCircle size={18} />Research Assistant</button>}</div></section>)}</nav>
       <div className="mt-8">
         <div className="flex items-center justify-between"><p className="eyebrow">Saved research</p>{saved.length > 0 && <button className="text-[11px] text-muted-foreground hover:text-destructive" onClick={onClearSaved}>Clear all</button>}</div>
         {saved.length === 0 ? <p className="mt-3 text-xs leading-5 text-muted-foreground">{cloudEnabled ? 'Completed reports saved in your workspace appear here.' : 'Completed reports saved in this browser appear here.'}</p> :
@@ -42,6 +43,7 @@ export function Sidebar({ open, onClose, onNew, saved, onOpenSaved, onRenameSave
       </div>
       <details className="sidebar-footer shrink-0 border-t border-border pt-3"><summary className="cursor-pointer text-sm font-medium">Account &amp; appearance</summary><div className="border-t border-border pt-4"><p className="mb-2 block text-xs text-muted-foreground">Appearance</p><ThemeControl theme={theme} onChange={onTheme} /><div className="mt-4 flex items-center gap-3"><UserRound /><div><p className="text-sm font-medium">{cloudEnabled ? 'Cloud workspace' : 'Local workspace'}</p><p className="text-xs text-muted-foreground">{cloudEnabled ? 'Private research and documents' : 'Saved in this browser'}</p></div></div></div>
       <AccountPanel /></details>
+      <div className="relative mt-2 shrink-0"><InfoPopover sidebar /></div>
     </aside>
   </>;
 }

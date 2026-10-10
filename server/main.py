@@ -24,19 +24,29 @@ async def lifespan(_: FastAPI):
         settings.validate_configuration()
     except ValueError as exc:
         logging.getLogger(__name__).warning("Configuration incomplete: %s", exc)
-    yield
+    from .productivity import alert_worker
+    worker = asyncio.create_task(alert_worker())
+    try:
+        yield
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
 
 
 app = FastAPI(title="AI Research Agent API", lifespan=lifespan)
 from . import workspace
+from .productivity import router as productivity_router
+app.include_router(productivity_router)
 
 
 @app.middleware('http')
 async def private_workspace(request: Request, call_next):
     from fastapi.responses import JSONResponse
+    if request.url.path.startswith('/api/library') and not workspace.configured():
+        return JSONResponse({'detail': 'Cloud setup is required for this action.'}, status_code=503)
     if request.method == 'OPTIONS' or not workspace.configured() or not (
         request.url.path.startswith('/api/research') or request.url.path.startswith('/api/workspace')
-        or request.url.path == '/api/assistant/pdf'):
+        or request.url.path.startswith('/api/library') or request.url.path == '/api/assistant/pdf'):
         return await call_next(request)
     try:
         user = await workspace.authenticate(request)
@@ -145,6 +155,11 @@ async def workspace_put(kind: str, identifier: str, request: Request):
         raise HTTPException(400, 'Invalid workspace record.') from None
     workspace.validate_record(kind, identifier, payload)
     owner = request.state.user['id']
+    if kind in {'collection', 'feedback'}:
+        from server.productivity import validate_productivity
+        payload = await validate_productivity(owner, kind, payload)
+        if payload['id'] != identifier:
+            raise HTTPException(400, 'Record identity mismatch.')
     if kind == 'chat':
         research = await workspace.load(owner, 'research', identifier)
         if research and research.get('state'):
@@ -208,7 +223,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -274,8 +289,8 @@ async def research_chat(research_id: str, request: AssistantRequest) -> ChatResp
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception:
-        logging.getLogger(__name__).exception("Research chat failed for %s", research_id)
+    except Exception as exc:
+        logging.getLogger(__name__).error("Research chat failed for %s (%s)", research_id, type(exc).__name__)
         raise HTTPException(status_code=503, detail="The research assistant is temporarily unavailable.") from None
 
 

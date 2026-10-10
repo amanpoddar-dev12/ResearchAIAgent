@@ -130,6 +130,7 @@ def test_prompt_context_is_bounded_even_for_long_original_evidence():
 
 
 def test_api_stream_preserves_event_envelope_and_isolates_sessions(monkeypatch):
+    monkeypatch.setattr('server.workspace.configured', lambda: False)
     import server.api.research as research
     from server.main import app
     index = SessionIndex()

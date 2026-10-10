@@ -1,0 +1,5 @@
+export interface Brief { goal: string; audience: string; geography: string }
+export const emptyBrief = (): Brief => ({ goal: '', audience: '', geography: '' });
+export function ResearchBrief({ value, onChange }: { value: Brief; onChange: (value: Brief) => void }) {
+  return <details className="rounded-xl border border-border p-3"><summary className="cursor-pointer text-sm font-medium">Research brief (optional)</summary><p className="mt-2 text-xs text-muted-foreground">Help shape the question. Set publication dates under Source filters.</p><div className="mt-3 grid gap-3 sm:grid-cols-2">{(['goal', 'audience', 'geography'] as const).map(key => <label key={key} className="text-xs capitalize">{key}<input className="select mt-1 w-full" maxLength={500} value={value[key]} onChange={event => onChange({ ...value, [key]: event.target.value })} placeholder={key === 'goal' ? 'What decision should this inform?' : key === 'audience' ? 'Who will read the report?' : 'Country or region; leave blank for any'} /></label>)}</div></details>;
+}

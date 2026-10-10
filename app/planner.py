@@ -53,7 +53,7 @@ class Planner:
             plan.sub_question_tasks = plan.sub_question_tasks[:mode.queries]
             return plan
         except (RuntimeError, ValueError) as exc:
-            logger.warning("Using deterministic fallback plan: %s", exc)
+            logger.warning("Using deterministic fallback plan (%s)", type(exc).__name__)
             return ResearchPlan(
                 objective=question.question,
                 research_areas=["Background and scope", "Primary evidence", "Limitations and disagreements"],

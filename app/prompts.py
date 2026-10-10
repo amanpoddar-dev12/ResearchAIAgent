@@ -120,7 +120,7 @@ Literature / Background Review, Detailed Analysis, Year-by-Year Progress / Timel
 Comparative Analysis, Discussion, Conclusion and Future Directions, References.
 Write substantial formal academic prose proportional to the available evidence;
 never pad a thin evidence base with invented detail. Supply an informative abstract,
-5–8 executive key_findings when that many supported findings exist (fewer otherwise),
+3–5 executive key_findings when that many supported findings exist (fewer otherwise),
 research questions, source-specific background, multiple detailed-analysis subsections,
 critical discussion of conflicts and scope, and evidence-bounded future directions.
 Return analytical prose in blocks with id, section_id, kind (observation, comparison,
@@ -153,6 +153,16 @@ chart with its data table when dated measurements exist, and a comparison chart 
 for comparable observations. Session quality/status diagnostics are added by the
 application; do not invent them or use their reserved IDs. Do not turn confidence or
 quality scores into probabilities of truth.
+Begin with a direct, concise answer to the exact research question. Separate source
+observations from explicitly labeled interpretations and unknowns. Explain disagreements
+through methods, dates, definitions or populations ONLY when linked evidence establishes
+that explanation; otherwise say it is unresolved. Every numerical caption must state
+the reported unit, observation period and geography/population, or explicitly mark each
+missing item as not reported. Do not pool unlike measurements or imply a trend from
+incompatible observations. Technical mode emphasizes evidenced constraints/trade-offs;
+Academic emphasizes methods/limitations; Fact Check preserves individual verdicts;
+Compare uses matched criteria without inventing a winner; Quick stays concise.
+Finish with specific research questions aimed at the supplied evidence gaps.
 Question: {question}
 Plan: {plan}
 Sources: {sources}

@@ -58,7 +58,8 @@ def test_pdf_context_bounds_and_missing_evidence_skip_generation(monkeypatch):
     asyncio.run(run())
 
 
-def test_pdf_upload_endpoint_and_invalid_file():
+def test_pdf_upload_endpoint_and_invalid_file(monkeypatch):
+    monkeypatch.setattr('server.workspace.configured', lambda: False)
     from server.main import app
     async def run():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:

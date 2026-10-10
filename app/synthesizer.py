@@ -3,6 +3,7 @@
 import logging
 import json
 import re
+from datetime import datetime, timezone
 from app.llm import LLMClient, invoke_structured
 from app.llm.routing import CONFLICT_ANALYSIS, FINAL_SYNTHESIS
 from app.models import (
@@ -59,7 +60,7 @@ class Synthesizer:
                     pass  # Unreviewed prose is excluded; traceable claims still render.
             return draft
         except (RuntimeError, ValueError) as exc:
-            logger.warning("Using evidence-only fallback report: %s", exc)
+            logger.warning("Using evidence-only fallback report (%s)", type(exc).__name__)
             return ReportDraft(
                 title=f"Research Report: {state.question.question}",
                 executive_summary="The available sources were collected, but Gemini did not return a structured synthesis.",
@@ -370,9 +371,18 @@ def build_structured_report(draft: ReportDraft, state: ResearchState) -> Structu
         return qualification + finding.claim.rstrip(".") + ". " + refs(evidence[key].source_id for key in finding.evidence_ids if key in evidence)
     def safe_label(text):
         return re.sub(r"https?://[^\s<>]+", "[URL omitted]", text).replace("\n", " ")
-    verified_points = [f"- {claim_text(finding)} **{finding.evidence_status}.**" for finding in supported[:8]]
+    def evidence_label(finding):
+        linked = [evidence[key] for key in finding.evidence_ids if key in evidence]
+        if any(item.relation == 'contradicts' for item in linked) or finding.evidence_status == 'Contradicted':
+            return 'Disputed', 'Contradicting evidence is linked; no resolution is assumed.'
+        origins = independent_source_count([sources[sid] for sid in dict.fromkeys(item.source_id for item in linked if item.relation == 'supports')])
+        if finding.evidence_status == 'Supported' and origins >= 2:
+            return 'Well supported', f'Supported claim with {origins} distinct source-origin groups (a heuristic, not a study-quality guarantee).'
+        return 'Limited evidence', 'Independent corroboration or complete support is missing; retain the claim’s documented scope.'
+    ranked = sorted(supported, key=lambda finding: (finding.evidence_status != 'Supported', -{'critical': 3, 'high': 2, 'medium': 1, 'low': 0}[finding.importance]))
+    verified_points = [f"- {claim_text(finding)} **{evidence_label(finding)[0]}:** {evidence_label(finding)[1]}" for finding in ranked[:5]]
     direct = [finding for finding in supported if finding.evidence_status == "Supported"]
-    answer = claim_text(direct[0]) if direct else "The available evidence does not establish a supported answer to the research question."
+    answer = claim_text(next(finding for finding in ranked if finding.evidence_status == 'Supported')) if direct else "The available evidence does not establish a supported answer to the research question."
     summary = answer + "\n\n### Key findings\n\n" + ("\n".join(verified_points) or "No traceable supporting findings were established. The research question remains Unverified.")
     unknown = list(dict.fromkeys(state.unresolved_questions + state.gaps))
     if unknown:
@@ -420,6 +430,8 @@ def build_structured_report(draft: ReportDraft, state: ResearchState) -> Structu
     for finding in findings:
         linked = [item for item in linked_evidence(state, finding) if item.id in evidence]
         paragraph = f"### Claim {finding.id}: {finding.evidence_status}\n\n"
+        label, reason = evidence_label(finding)
+        paragraph += f"**Evidence strength — {label}:** {reason}\n\n"
         if finding.evidence_status == "Supported":
             paragraph += claim_text(finding)
         else:
@@ -541,7 +553,37 @@ def build_structured_report(draft: ReportDraft, state: ResearchState) -> Structu
         if key in {"analysis", "discussion", "introduction"}:
             content[key] = "\n\n".join(paragraphs) + "\n\n" + content[key]
         else:
-            content[key] = "\n\n".join(paragraphs)
+            content[key] = content[key] + "\n\n" + "\n\n".join(paragraphs)
+    # Session-derived boundaries must remain visible even after reviewed model prose.
+    dates = sorted({source.publication_date for source in sources.values() if source.publication_date})
+    session_date = state.audit_log[-1].timestamp if state.audit_log else datetime.now(timezone.utc).isoformat()
+    freshness = f"Research session: {safe_label(str(session_date))}. "
+    freshness += (f"Reported source publication dates: {safe_label(dates[0])} to {safe_label(dates[-1])}. " if dates else 'No source publication dates were reported. ')
+    freshness += f"{sum(not source.publication_date for source in sources.values())} cited source(s) have unknown publication dates. Publication dates are not observation dates; this report does not establish that historical measurements remain current."
+    content['methodology'] = freshness + "\n\n" + content['methodology']
+    if state.brief:
+        content['methodology'] += '\n\nUser-requested research brief (scope, not evidence):\n' + '\n'.join(f'- {key.capitalize()}: {safe_label(value)}' for key, value in state.brief.items() if value)
+    content['executive-summary'] += "\n\nEvidence-strength labels describe linked evidence, not probabilities of truth. ‘Well supported’ requires a Supported claim and at least two distinct source-origin groups; ‘Limited evidence’ lacks complete support or corroboration; ‘Disputed’ has contradicting evidence."
+    content['comparison'] += "\n\nMeasurement scope: use the source excerpts and figure captions to check units, observation dates, geography/population and methods. Any unreported scope remains unknown; publication year is never substituted for observation year. Session diagnostic charts describe this research process, not topic measurements."
+    followups = [f"- What evidence answers: {safe_label(item)}?" for item in limits[:5]]
+    for finding in ranked:
+        if len(followups) >= 5:
+            break
+        if evidence_label(finding)[0] != 'Well supported':
+            followups.append(f"- Which independent primary source corroborates this claim within the same timeframe and population: {safe_label(finding.claim)}?")
+    if not followups:
+        followups = [f"- Do newer primary sources confirm the findings for {safe_label(state.question.question)} under the same definitions and measurement conditions?"]
+    content['conclusion'] += "\n\n### Next research questions\n\n" + "\n".join(dict.fromkeys(followups))
+    if state.mode == 'technical':
+        content['analysis'] += "\n\n### Implementation trade-offs\n\nUse only the source-backed findings above to assess constraints and alternatives. Unmeasured latency, cost, scalability and compatibility remain unknown; performance claims are not implementation recommendations."
+    elif state.mode == 'fact_check':
+        content['executive-summary'] += "\n\n### Claim verdicts\n\n" + ('\n'.join(f"- {claim_text(finding)} **Verdict: {finding.evidence_status}.** {evidence_label(finding)[1]}" for finding in findings[:8]) or 'No traceable claim verdict is available.')
+    elif state.mode == 'academic':
+        content['methodology'] += "\n\nStudy methods and populations are known only where the linked excerpts report them. Source type and publication date do not establish peer review or methodological quality. This bounded search is not a systematic review."
+    if state.mode == 'quick':
+        # Keep the established section IDs/order while avoiding repeated findings.
+        content['abstract'] = answer + "\n\nQuick review: the key findings, evidence trail and limitations below are bounded by this session's short research budget."
+        content['background'] = 'Source-specific supporting excerpts are retained in Detailed Analysis. This quick review does not establish an exhaustive literature review.'
     return StructuredReport(title=f"Research Report: {safe_label(state.question.question)}",
         sections=[ReportSection(id=key, title=title, content=content[key]) for key, title in SECTION_TITLES], charts=charts, tables=tables)
 

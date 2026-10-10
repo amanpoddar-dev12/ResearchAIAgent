@@ -94,7 +94,7 @@ async def usage(user: dict) -> dict:
 
 
 def validate_record(kind: str, identifier: str, payload: dict | None = None):
-    if kind not in {'research', 'chat', 'pdf'} or not re.fullmatch(r'[A-Za-z0-9_-]{1,150}', identifier):
+    if kind not in {'research', 'chat', 'pdf', 'collection', 'feedback'} or not re.fullmatch(r'[A-Za-z0-9_-]{1,150}', identifier):
         raise HTTPException(400, 'Invalid workspace record.')
     if payload is not None and len(json.dumps(payload, ensure_ascii=False).encode()) > 48 * 1024 * 1024:
         raise HTTPException(413, 'This workspace record is too large.')

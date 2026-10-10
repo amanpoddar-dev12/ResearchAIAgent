@@ -5,6 +5,8 @@ from app.modes import ModeName
 
 
 class ResearchRequest(BaseModel):
+    review_checkpoint: bool = False
+    brief: dict[str, str] = Field(default_factory=dict, max_length=3)
     parent_research_id: str | None = Field(default=None, min_length=1, max_length=150, pattern=r'^[A-Za-z0-9_-]+$')
     question: str = Field(min_length=3)
     depth: Literal["quick", "standard", "deep"] = "standard"
@@ -17,6 +19,8 @@ class ResearchRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_targets(self):
+        if any(key not in {'goal', 'audience', 'geography'} or len(value) > 500 for key, value in self.brief.items()):
+            raise ValueError('Research brief contains an invalid field or exceeds 500 characters per field')
         self.target_claims = list(dict.fromkeys(item.strip() for item in self.target_claims if item.strip()))
         self.comparison_items = list(dict.fromkeys(item.strip() for item in self.comparison_items if item.strip()))
         if self.mode == "compare" and len(self.comparison_items) < 2:

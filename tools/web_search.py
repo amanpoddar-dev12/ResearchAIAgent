@@ -19,7 +19,7 @@ def normalize_url(url: str) -> str:
 def search_web(api_key: str, query: str, max_results: int = 5, timeout: float = 20.0, *, search_depth: str = "basic", filters: SourceFilters | None = None) -> list[SearchResult]:
     if not api_key:
         raise ValueError("TAVILY_API_KEY is missing")
-    logger.info("Searching Tavily: %s", query)
+    logger.info("Searching Tavily")
     payload = {"api_key": api_key, "query": query, "max_results": max_results, "include_answer": False, "search_depth": search_depth}
     if filters:
         if filters.include_domains:
@@ -31,7 +31,7 @@ def search_web(api_key: str, query: str, max_results: int = 5, timeout: float = 
         response.raise_for_status()
         items = response.json().get("results", [])
     except (httpx.HTTPError, ValueError, TypeError) as exc:
-        logger.warning("Tavily search failed: %s", exc)
+        logger.warning("Tavily search failed (%s)", type(exc).__name__)
         return []
     results: list[SearchResult] = []
     seen: set[str] = set()

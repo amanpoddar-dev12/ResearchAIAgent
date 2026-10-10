@@ -12,6 +12,7 @@ from tests.research_fakes import SyntheticLLM, synthetic_search, synthetic_setti
 
 @pytest.fixture
 def offline_pipeline(monkeypatch):
+    monkeypatch.setattr('server.workspace.configured', lambda: False)
     research.jobs.clear()
     monkeypatch.setattr("app.agent.GeminiClient", SyntheticLLM)
     monkeypatch.setattr("app.researcher.search_web", synthetic_search)

@@ -128,7 +128,12 @@ def build_context(state: ResearchState, question: str, history: list[dict],
             selected.append(chunk)
             document_counts[chunk["id"]] += 1
     identifiers = selected_sources(selected)
-    return AssistantContext(serialize(selected), {source.id: source for source in state.sources if source.id in identifiers}, False)
+    selected_text = {}
+    for chunk in selected:
+        source_id = chunk['metadata'].get('sourceId')
+        if source_id:
+            selected_text.setdefault(source_id, []).append(chunk['text'])
+    return AssistantContext(serialize(selected), {source.id: source.model_copy(update={'content': '\n\n'.join(selected_text.get(source.id, []))}) for source in state.sources if source.id in identifiers}, False)
 
 
 class HybridAnswer:
@@ -177,7 +182,7 @@ class HybridAnswer:
                 self.invalid_citations = True
                 return "[uncertain]"
             source = self.context.sources[source_id]
-            self.references[source_id] = ChatCitation(citation_id=source_id, source_id=source_id, title=source.title, url=source.url or None, supporting_text=source.content[:2000] if source_id.startswith("P") else None)
+            self.references[source_id] = ChatCitation(citation_id=source_id, source_id=source_id, title=source.title, url=source.url or None, supporting_text=source.content[:2000] if source_id.startswith("P") or not source.url else None)
             return match.group()
 
         safe = re.sub(r"\[[SP][A-Za-z0-9_.-]*\]", citation, raw)

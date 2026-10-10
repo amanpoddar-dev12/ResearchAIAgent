@@ -5,6 +5,13 @@ import { authHeaders, cloudEnabled } from './auth';
 // Local fetch and SSE requests must use Vite's /api proxy, even when a production URL is configured.
 const API_URL = (import.meta.env.DEV ? "" : import.meta.env.VITE_API_URL || import.meta.env.VITE_BACKEND_URL || "").replace(/\/$/, "");
 const backendHint = API_URL || import.meta.env.VITE_BACKEND_URL || "the configured FastAPI port";
+export async function libraryRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await apiRequest(`${API_URL}/api/${path}`, { ...init, headers: { 'Content-Type': 'application/json', ...init.headers } });
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.detail || 'The workspace action could not be completed.');
+  return body as T;
+}
+export const assistantEndpoint = (researchId: string, collectionId?: string) => collectionId ? `${API_URL}/api/library/collections/${encodeURIComponent(collectionId)}/chat` : `${API_URL}/api/research/${researchId}/chat/stream`;
 
 async function apiRequest(url: string, init?: RequestInit): Promise<Response> {
   const authorization = cloudEnabled ? await authHeaders() : {};

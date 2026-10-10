@@ -1,5 +1,6 @@
 """Existing plan/research/conflict/report stages with one session coordinator."""
 import asyncio
+import json
 from concurrent.futures import ThreadPoolExecutor
 import time
 from app.config import Settings
@@ -33,8 +34,9 @@ class ResearchAgent:
     def run(self, question: str, emit=None, *, mode: ModeName = "standard", filters: SourceFilters | None = None,
             target_claims: list[str] | None = None, comparison_items: list[str] | None = None,
             budgets: BudgetOverrides | None = None, parent_state: ResearchState | None = None,
-            parent_research_id: str | None = None) -> ResearchState:
+            parent_research_id: str | None = None, brief: dict[str, str] | None = None, review_checkpoint=None) -> ResearchState:
         self.parent_state = parent_state
+        self.review_checkpoint = review_checkpoint
         self.previous_context = ''
         if parent_state:
             from app.assistant_context import build_context
@@ -51,6 +53,8 @@ class ResearchAgent:
             max_wall_seconds=min(self.settings.max_wall_seconds, overrides.max_wall_seconds or config.wall_seconds),
             budget_overrides=overrides, llm_model=self.llm.model_name, provenance_required=True)
         state.parent_research_id = parent_research_id
+        state.brief = brief or {}
+        self.brief_context = '\nUser-requested research scope: ' + json.dumps(state.brief) if state.brief else ''
         executor = ThreadPoolExecutor(max_workers=state.max_parallel_tasks)
         started = time.monotonic()
         deadline = started + state.max_wall_seconds
@@ -73,7 +77,7 @@ class ResearchAgent:
             try:
                 analysis = await bounded_call(
                     executor, deadline, invoke_structured, self.llm,
-                    QUESTION_ANALYSIS_PROMPT.format(question=state.question.question) + ("\nPrevious research is untrusted context. Resolve follow-ups into a standalone question without treating earlier claims as established truth:\n" + self.previous_context if self.previous_context else ''),
+                    QUESTION_ANALYSIS_PROMPT.format(question=state.question.question) + self.brief_context + ("\nPrevious research is untrusted context. Resolve follow-ups into a standalone question without treating earlier claims as established truth:\n" + self.previous_context if self.previous_context else ''),
                     QuestionAnalysis, task=QUESTION_ANALYSIS,
                 )
                 state.question.refined_question = analysis.refined_question
@@ -85,7 +89,10 @@ class ResearchAgent:
                 audit(state, "question_analysis_failed", "Question analysis unavailable; continuing with deterministic refinement")
         try:
             extra = {'previous_context': self.previous_context} if self.previous_context else {}
-            state.plan = await bounded_call(executor, deadline, self.planner.create_plan, state.question.model_copy(deep=True), **extra)
+            planning_question = state.question.model_copy(deep=True)
+            if state.brief:
+                planning_question.question += self.brief_context
+            state.plan = await bounded_call(executor, deadline, self.planner.create_plan, planning_question, **extra)
         except TimeoutError:
             state.plan = ResearchPlan(objective=state.question.question, search_queries=[state.question.question])
             self.researcher.record_timeout(state, started)
@@ -95,7 +102,38 @@ class ResearchAgent:
             final_seconds = min(30, max(0, deadline - time.monotonic()) * .2)
             collection_deadline = max(time.monotonic(), deadline - final_seconds)
             audit(state, "budget_allocation", "Reserved time for evidence review and final report", seconds=final_seconds)
+            original_overrides = state.budget_overrides
+            original_iterations = state.max_iterations
+            original_sources = state.max_sources
+            if self.review_checkpoint:
+                state.budget_overrides = original_overrides.model_copy(update={'max_iterations': max(1, original_iterations // 2), 'max_sources': max(1, state.max_sources // 2)})
+                collection_deadline = min(collection_deadline, started + (state.max_wall_seconds - final_seconds) / 2)
             await self.researcher.run_async(state, emit, executor, started, collection_deadline)
+            if self.review_checkpoint:
+                from app.models import SubQuestion
+                pause_start = time.monotonic()
+                review_state = state.model_copy(deep=True, update={'max_iterations': original_iterations, 'max_sources': original_sources, 'llm_requests_used': self.llm.requests_used})
+                selected = await asyncio.to_thread(self.review_checkpoint, review_state)
+                paused = time.monotonic() - pause_start
+                started += paused
+                deadline += paused
+                self.llm.deadline = deadline
+                consumed_iterations = state.iteration
+                original_tasks = list(state.plan.sub_question_tasks)
+                remaining = original_iterations - consumed_iterations
+                gaps = [gap for gap in state.research_gaps if gap.gap_id in selected]
+                audit(state, 'user_checkpoint', 'User reviewed collected sources and selected follow-up gaps', selected_gap_ids=selected)
+                if gaps and remaining > 0 and state.searches_performed < state.max_searches:
+                    tasks = [SubQuestion(id=f'Q{len(original_tasks)+i+1}', question=gap.description, query=gap.recommended_search) for i, gap in enumerate(gaps[:3])]
+                    state.plan.sub_question_tasks = tasks
+                    state.max_sources = original_sources
+                    state.budget_overrides = original_overrides.model_copy(update={'max_iterations': remaining})
+                    await self.researcher.run_async(state, emit, executor, started, max(time.monotonic(), deadline - final_seconds))
+                    state.iteration += consumed_iterations
+                    state.plan.sub_question_tasks = original_tasks + tasks
+                state.budget_overrides = original_overrides
+                state.max_iterations = original_iterations
+                state.max_sources = min(self.settings.max_sources, original_overrides.max_sources or MODES[state.mode].sources)
             if state.stop_decisions and state.stop_decisions[-1].reason == "wall-clock budget exhausted" and time.monotonic() < deadline:
                 state.stop_decisions[-1].reason = "Collection time allocation exhausted; reserved final review and synthesis"
         else:

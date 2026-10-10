@@ -89,7 +89,8 @@ class LLMRouter(LLMClient):
                 repaired = await provider.complete(messages + repair, task=task, temperature=temperature, max_tokens=max_tokens)
                 return self._parse(repaired, response_model)
             except (json.JSONDecodeError, ValidationError, TypeError, ValueError) as second_error:
-                raise ProviderResponseError(provider_name, task, f"structured response validation failed: {second_error}") from second_error
+                # Validation errors include model values, which may contain private evidence.
+                raise ProviderResponseError(provider_name, task, "structured response validation failed") from None
 
     async def _reserve_request(self, task="unknown") -> None:
         self._reserve_attempt(task)

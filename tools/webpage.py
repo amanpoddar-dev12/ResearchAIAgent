@@ -100,5 +100,5 @@ def fetch_webpage(url: str, timeout: float = 15.0, max_chars: int = 30_000, *, m
             return " ".join(soup.get_text(" ", strip=True).split())[:max_chars]
         raise ValueError("Too many redirects")
     except (httpx.HTTPError, OSError, ValueError, UnicodeError) as exc:
-        logger.warning("Could not fetch webpage %s: %s", url, exc)
+        logger.warning("Could not fetch webpage (%s)", type(exc).__name__)
         return ""

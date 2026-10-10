@@ -22,7 +22,7 @@ class Extractor:
             result = invoke_structured(self.llm, prompt, ClaimExtraction, task=SOURCE_EXTRACTION)
             return result.findings
         except (ValueError, TypeError) as exc:
-            logger.warning("Claim extraction failed for %s: %s", source.url, exc)
+            logger.warning("Claim extraction failed (%s)", type(exc).__name__)
             return []
 
     def extract_many(self, question: str, sources: list[Source]) -> list[Finding]:
