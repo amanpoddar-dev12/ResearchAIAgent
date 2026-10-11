@@ -1,8 +1,9 @@
+import { FindingsLogo } from "./FindingsLogo";
 import { ThemeControl } from "./ThemeControl";
 import { InfoPopover } from "./InfoPopover";
 import { useEffect, useState } from "react";
 import type { Theme } from "../theme";
-import { BookOpen, FileCheck2, FileText, Gauge, ListChecks, MessageCircle, Plus, Settings2, ShieldAlert, BrainCircuit, UserRound, X } from "lucide-react";
+import { BookOpen, FileCheck2, FileText, Gauge, ListChecks, MessageCircle, Plus, Settings2, ShieldAlert, UserRound, X } from "lucide-react";
 import type { SavedResearch } from "../storage/researchStorage";
 import { AccountPanel } from './AccountPanel';
 import { cloudEnabled } from '../services/auth';
@@ -31,7 +32,7 @@ export function Sidebar({ open, onClose, onNew, saved, onOpenSaved, onRenameSave
   useEffect(() => { const update = () => setSection(window.location.hash || "#main-content"); window.addEventListener("hashchange", update); return () => window.removeEventListener("hashchange", update); }, []);
   return <><button aria-label="Close navigation" className={`drawer-backdrop ${open ? "block" : "hidden"}`} onClick={onClose} />
     <aside className={`sidebar no-print ${open ? "translate-x-0" : "-translate-x-full"}`} aria-label="Research navigation">
-      <div className="flex items-center justify-between"><div className="flex items-center gap-2"><span className="app-mark"><BrainCircuit size={24} /></span><span className="font-medium">FindingsAI</span></div><button className="icon-button lg:hidden" onClick={onClose} aria-label="Close navigation"><X size={18} /></button></div>
+      <div className="flex items-center justify-between"><div className="flex items-center gap-2"><FindingsLogo /></div><button className="icon-button lg:hidden" onClick={onClose} aria-label="Close navigation"><X size={18} /></button></div>
       <button className="button-primary mt-7 w-full justify-center" onClick={() => { onNew(); onClose(); }}><Plus size={16} /> New Research</button>
       <div className="sidebar-content min-h-0 flex-1 overflow-y-auto">
       <button className="sidebar-link mt-4 w-full" aria-current={activeView === "library" ? "page" : undefined} onClick={() => { onViewChange("library"); onClose(); }}><BookOpen size={18} />Research library</button><nav className="mt-5 space-y-4" aria-label="Research sections">{groups.map((group) => <section key={group.title}><p className="eyebrow mb-2 px-3">{group.title}</p><div className="space-y-1">{group.items.map(([label, Icon, href]) => <a key={label} href={href} className="sidebar-link" onClick={() => { onViewChange("research"); onClose(); }} aria-current={activeView === "research" && section === href ? "location" : undefined}><Icon size={18} />{label}</a>)}{group.title === "Research" && <button type="button" className="sidebar-link w-full" aria-current={activeView === "assistant" ? "page" : undefined} onClick={() => { onViewChange("assistant"); onClose(); }}><MessageCircle size={18} />Research Assistant</button>}</div></section>)}</nav>

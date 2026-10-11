@@ -8,7 +8,7 @@ import { ResearchLibrary } from '../components/ResearchLibrary';
 import { gapLabel } from '../ui/researchPresentation';
 import { cloudEnabled } from '../services/auth';
 import { useTheme } from "../theme";
-import { useEffect, useReducer, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useReducer, useRef, useState } from "react";
 import { Header } from "../components/Header";
 import { Sidebar } from "../components/Sidebar";
 import { ResearchInput } from "../components/ResearchInput";
@@ -18,7 +18,6 @@ import { SourceList } from "../components/SourceList";
 import { SourcePreview } from "../components/SourcePreview";
 import { FindingCard } from "../components/FindingCard";
 import { ConflictCard } from "../components/ConflictCard";
-import { ResearchReport } from "../components/ResearchReport";
 import { ResearchGraph } from "../components/ResearchGraph";
 import { AuditView } from "../components/AuditView";
 import { EmptyState } from "../components/EmptyState";
@@ -38,6 +37,8 @@ import { initialResearchSession, researchReducer } from "../state/researchStore"
 import { restoreResearch } from "../state/researchStore";
 import { deleteSavedResearch, clearSavedResearch, listSavedResearch, saveResearch, toSavedResearch, type SavedResearch } from "../storage/researchStorage";
 import { citationCoverage, evidenceCount, highQualitySources, relevantSources, researchCoverage, verifiedClaims } from "../scoring/metrics";
+const ResearchReport = lazy(() => import("../components/ResearchReport").then(module => ({ default: module.ResearchReport })));
+
 export function ResearchPage() {
   const [generalChatId] = useState(getGeneralChatId);
   const [activeTab, setActiveTab] = useState<"research" | "assistant" | "library">("research");
@@ -200,7 +201,7 @@ export function ResearchPage() {
           <div className="research-results grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,380px)]">
             {status === 'researching' && <ResearchCheckpoint events={session.events} onPreview={setPreview} />}
             {status === "completed" && <div className="report-full-width no-print"><p className="text-sm text-muted-foreground">{restoredResearchId ? `Saved report · ${new Date(saved.find(item => item.id === restoredResearchId)?.savedAt || Date.now()).toLocaleDateString()}` : "Research finished"}</p>{snapshot?.completion_quality === "partial" && <p role="status" className="mt-2 text-sm text-warning">The evidence is incomplete. Review the limitations or continue researching a gap before relying on the conclusions.</p>}</div>}
-            {session.report && <div className="report-full-width"><ResearchReport markdown={session.report} structured={snapshot?.structured_report} sources={session.sources} onPreview={setPreview} /></div>}
+            {session.report && <div className="report-full-width"><Suspense fallback={<p role="status" className="text-muted-foreground">Loading report...</p>}><ResearchReport markdown={session.report} structured={snapshot?.structured_report} sources={session.sources} onPreview={setPreview} /></Suspense></div>}
             <details className="report-full-width research-diagnostics no-print" open={status !== "completed"}><summary className="cursor-pointer rounded-xl border border-border p-4 text-sm font-medium">Evidence, sources &amp; research diagnostics</summary><div className="mt-6 grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,380px)]">
             <div className="min-w-0 space-y-6 no-print">
               {!restoredResearchId && <ResearchProgress events={session.events} status={status} hasReport={Boolean(session.report)} mode={mode} sources={session.sources} />}
