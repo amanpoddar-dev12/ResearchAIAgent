@@ -1,3 +1,6 @@
+import { Square } from "lucide-react";
+import { GoogleIcon } from "../components/GoogleIcon";
+import { validateResearchCredits } from "../services/guestUsage";
 import "../workspace.css";
 import { emptyBrief } from '../components/ResearchBrief';
 import { VersionComparison } from '../components/VersionComparison';
@@ -40,6 +43,11 @@ import { citationCoverage, evidenceCount, highQualitySources, relevantSources, r
 const ResearchReport = lazy(() => import("../components/ResearchReport").then(module => ({ default: module.ResearchReport })));
 
 export function ResearchPage() {
+  const starting = useRef(false);
+  const [runningResearchId, setRunningResearchId] = useState<string | null>(null);
+  const [stoppingResearch, setStoppingResearch] = useState(false);
+  const [checkingCredits, setCheckingCredits] = useState(false);
+  const [creditToast, setCreditToast] = useState(false);
   const [generalChatId] = useState(getGeneralChatId);
   const [activeTab, setActiveTab] = useState<"research" | "assistant" | "library">("research");
   const [question, setQuestion] = useState("");
@@ -54,6 +62,13 @@ export function ResearchPage() {
   const [preview, setPreview] = useState<ResearchSource | null>(null);
   const { theme, setTheme, dark, cycleTheme } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia("(min-width: 1024px)").matches);
+  useEffect(() => {
+    const showLogin = () => setCreditToast(true);
+    const openLogin = () => setSidebarOpen(true);
+    window.addEventListener('research-login-required', showLogin);
+    window.addEventListener('workspace-login-open', openLogin);
+    return () => { window.removeEventListener('research-login-required', showLogin); window.removeEventListener('workspace-login-open', openLogin); };
+  }, []);
   const [elapsed, setElapsed] = useState(0);
   const [saved, setSaved] = useState<SavedResearch[]>([]);
   const [storageError, setStorageError] = useState("");
@@ -115,10 +130,11 @@ export function ResearchPage() {
   }, [activeTab, snapshot]);
   const clearResults = () => {
     generation.current++;
-    const activeId = session.events.find((event) => event.research_id)?.research_id;
+    const activeId = runningResearchId || session.events.find((event) => event.research_id)?.research_id;
     if (status === "researching" && activeId) void cancelResearch(activeId).catch(() => {});
     cleanup.current?.();
     cleanup.current = null;
+    setRunningResearchId(null); setStoppingResearch(false);
     dispatch({ type: "reset" });
     setRestoredResearchId(null);
     setActiveTab("research");
@@ -149,7 +165,18 @@ export function ResearchPage() {
   const removeSaved = async (id: string) => { if (!window.confirm("Delete this saved report permanently? Its independent chats and PDFs will remain.")) return; try { await deleteSavedResearch(id); setSaved(await listSavedResearch()); } catch { setStorageError("This saved research could not be deleted."); } };
   const clearSaved = async () => { if (window.confirm(cloudEnabled ? "Delete all saved research from your cloud workspace? Independent chats and PDFs will remain." : "Clear all saved research from this browser?")) { try { await clearSavedResearch(); setSaved([]); } catch { setStorageError("Saved research could not be cleared."); } } };
   const run = async () => {
-    if (question.trim().length < 3 || status === "researching") return;
+    if (question.trim().length < 3 || status === "researching" || starting.current) return;
+    starting.current = true;
+    setCheckingCredits(true);
+    if (cloudEnabled) {
+      try {
+        const allowed = await validateResearchCredits();
+        if (!allowed) { starting.current = false; setCheckingCredits(false); return; }
+      } catch (error) {
+        setStorageError(error instanceof Error ? error.message : 'Could not check research credits.'); starting.current = false; setCheckingCredits(false); return;
+      }
+    }
+    setCheckingCredits(false);
     clearResults();
     const current = generation.current;
     dispatch({ type: "reset" });
@@ -161,6 +188,7 @@ export function ResearchPage() {
         target_claims: mode === "fact_check" ? items : [], comparison_items: mode === "compare" ? items : [], ...(continuationParent ? { parent_research_id: continuationParent } : {}) });
       setContinuationParent(null);
       if (generation.current !== current) { void cancelResearch(id).catch(() => {}); return; }
+      setRunningResearchId(id);
       cleanup.current = streamResearch(id, (event: ResearchEvent) => {
         if (event.type === 'cloud_save_failed') setStorageError(event.message);
         if (['complete', 'research_failed'].includes(event.type)) window.dispatchEvent(new Event('research-usage-changed'));
@@ -169,7 +197,22 @@ export function ResearchPage() {
         if (generation.current === current) dispatch({ type: "error", message: error.message });
       });
     } catch (error) {
+      window.dispatchEvent(new Event('research-usage-changed'));
       if (generation.current === current) dispatch({ type: "error", message: error instanceof Error ? error.message : "Could not start research." });
+    } finally { starting.current = false; }
+  };
+  useEffect(() => { if (status !== "researching") setStoppingResearch(false); }, [status]);
+  const stopResearch = async () => {
+    const id = runningResearchId || session.events.find(event => event.research_id)?.research_id;
+    if (!id || stoppingResearch) return;
+    setStoppingResearch(true);
+    const current = generation.current;
+    try { await cancelResearch(id); }
+    catch (error) {
+      if (generation.current === current) {
+        setStoppingResearch(false);
+        setStorageError(error instanceof Error ? error.message : "Could not stop research. Please try again.");
+      }
     }
   };
   const researchId = session.events.find((event) => event.research_id)?.research_id || restoredResearchId;
@@ -183,10 +226,17 @@ export function ResearchPage() {
     window.location.hash = 'main-content';
   };
   return <div className="app-shell min-h-screen">
+    {creditToast && <div role="alert" aria-live="assertive" className="fixed bottom-4 left-4 right-4 z-50 flex items-center gap-3 rounded-xl border border-border bg-surface p-4 shadow-soft sm:left-auto sm:w-[min(26rem,calc(100vw-2rem))] no-print">
+      <p className="min-w-0 flex-1 text-sm text-foreground">Your 5 free research credits are used up. Sign in to continue.</p>
+      <button type="button" aria-label="Open Google sign-in" title="Sign in with Google" className="icon-button flex min-h-11 min-w-11 items-center justify-center" onClick={() => { window.dispatchEvent(new Event('workspace-login-open')); setCreditToast(false); }}><GoogleIcon /></button>
+      <button type="button" aria-label="Dismiss credit notification" className="icon-button min-h-11 min-w-11" onClick={() => setCreditToast(false)}>×</button>
+    </div>}
     <Sidebar open={sidebarOpen} onClose={() => { if (window.matchMedia("(max-width: 1023px)").matches) setSidebarOpen(false); }} onNew={reset} saved={saved} onOpenSaved={openSaved} onRenameSaved={renameSaved} onDeleteSaved={removeSaved} onClearSaved={clearSaved} activeView={activeTab} onViewChange={setActiveTab} theme={theme} onTheme={setTheme} />
     <div className={sidebarOpen ? "lg:pl-[260px]" : ""}>
       <Header dark={dark} onTheme={cycleTheme} onNew={reset} onMenu={() => setSidebarOpen((open) => !open)} status={status === "completed" ? snapshot?.completion_quality === "partial" ? "Evidence incomplete" : "Finished" : status} mode={mode} />
       <main id="main-content" className={`mx-auto max-w-7xl overflow-x-hidden px-6 py-8 lg:px-8 ${activeTab === "assistant" ? "assistant-workspace" : ""}`}>
+        {status === "researching" && <div className="mb-4 flex justify-end no-print"><button type="button" className="button-secondary min-h-11 border border-border text-destructive" disabled={!(runningResearchId || researchId) || stoppingResearch} onClick={() => void stopResearch()}><Square size={16} aria-hidden="true" />{stoppingResearch ? "Stopping research..." : (runningResearchId || researchId) ? "Stop research" : "Starting research..."}</button></div>}
+        {checkingCredits && <p role="status" aria-live="polite" className="mb-4 text-sm text-muted-foreground no-print">Checking research credits...</p>}
         {activeTab === 'library' && <ResearchLibrary saved={saved} onOpen={openSaved} onPreview={setPreview} />}
         {activeTab !== "library" && (activeTab === "assistant" || status !== "idle") && <div className="mb-8 flex flex-wrap items-end justify-between gap-4 no-print">
           <div><p className="eyebrow">{activeTab === "assistant" ? "Research Assistant" : "Research workspace"}</p><h1 className="mt-2 text-2xl font-medium tracking-tight sm:text-3xl">{activeTab === "assistant" ? "Your research, in conversation" : snapshot?.question.refined_question || question || "Start with a research question"}</h1></div>
@@ -197,7 +247,7 @@ export function ResearchPage() {
         {continuationParent && <p className="mb-4 text-sm text-muted-foreground" role="status">Continuing a saved report. This run will save a separate version with its own evidence.<button className="ml-2 underline" onClick={() => setContinuationParent(null)}>Start independently</button></p>}
         {status === "completed" && researchId && <section className="card mb-6 no-print" aria-label="Continue saved research"><h2 className="section-title">Continue research</h2><p className="mt-2 text-sm text-muted-foreground">Investigate a follow-up or evidence gap. The original report stays saved.</p><button className="button-secondary mt-3" onClick={() => prepareContinuation(`Update the research on: ${snapshot?.question.question || question}. Investigate new primary evidence and unresolved questions.`)}>Update this research</button>{snapshot?.research_gaps?.filter((gap, index, all) => all.findIndex(other => gapLabel(other) === gapLabel(gap)) === index).slice(0, 3).map((gap) => <button key={gap.gap_id} className="chip mt-3 ml-2 text-left" onClick={() => prepareContinuation(`For the research on ${snapshot.question.question}, investigate this evidence gap: ${gap.description}. Search focus: ${gap.recommended_search}`)} title={gap.description}>{gapLabel(gap)}</button>)}</section>}
         {snapshot?.parent_research_id && <p className="mb-4 text-sm text-muted-foreground no-print">Continued research · <button className="underline" onClick={() => { const parent = saved.find((item) => item.id === snapshot.parent_research_id); if (parent) openSaved(parent); else setStorageError('The original report is no longer available in this workspace.'); }}>Open original report</button></p>}
-        {status === "idle" ? <><ResearchInput reviewCheckpoint={reviewCheckpoint} setReviewCheckpoint={setReviewCheckpoint} brief={brief} setBrief={setBrief} value={question} setValue={setQuestion} mode={mode} setMode={setMode} maxSources={maxSources} setMaxSources={setMaxSources} filters={filters} setFilters={setFilters} targets={targets} setTargets={setTargets} disabled={false} onSubmit={run} budgets={budgets} setBudgets={setBudgets} /><EmptyState /></> :
+        {status === "idle" ? <><ResearchInput reviewCheckpoint={reviewCheckpoint} setReviewCheckpoint={setReviewCheckpoint} brief={brief} setBrief={setBrief} value={question} setValue={setQuestion} mode={mode} setMode={setMode} maxSources={maxSources} setMaxSources={setMaxSources} filters={filters} setFilters={setFilters} targets={targets} setTargets={setTargets} disabled={checkingCredits} onSubmit={run} budgets={budgets} setBudgets={setBudgets} /><EmptyState /></> :
           <div className="research-results grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(300px,380px)]">
             {status === 'researching' && <ResearchCheckpoint events={session.events} onPreview={setPreview} />}
             {status === "completed" && <div className="report-full-width no-print"><p className="text-sm text-muted-foreground">{restoredResearchId ? `Saved report · ${new Date(saved.find(item => item.id === restoredResearchId)?.savedAt || Date.now()).toLocaleDateString()}` : "Research finished"}</p>{snapshot?.completion_quality === "partial" && <p role="status" className="mt-2 text-sm text-warning">The evidence is incomplete. Review the limitations or continue researching a gap before relying on the conclusions.</p>}</div>}
@@ -206,7 +256,6 @@ export function ResearchPage() {
             <div className="min-w-0 space-y-6 no-print">
               {!restoredResearchId && <ResearchProgress events={session.events} status={status} hasReport={Boolean(session.report)} mode={mode} sources={session.sources} />}
               {!restoredResearchId && <ResearchTimeline events={session.events} status={status} />}
-              {status === "researching" && researchId && <button className="button-secondary" onClick={() => void cancelResearch(researchId).catch((error: Error) => dispatch({ type: "error", message: error.message }))}>Cancel research</button>}
               {status === "completed" && snapshot?.completion_quality === "partial" && <p className="text-sm text-warning dark:text-warning" role="status">Report ready with unresolved evidence gaps. Review the limitations before using its conclusions.</p>}
               {snapshot && <section aria-label="Research overview"><div className="grid gap-3 sm:grid-cols-3">
                 <MetricCard label="Sources found" value={session.sources.length} description="Number of sources discovered in this session." />

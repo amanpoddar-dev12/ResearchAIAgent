@@ -1,7 +1,8 @@
+import { useGuestUsage } from "../services/guestUsage";
 import { FindingsLogo } from "./FindingsLogo";
 import { ThemeControl } from "./ThemeControl";
 import { InfoPopover } from "./InfoPopover";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Theme } from "../theme";
 import { BookOpen, FileCheck2, FileText, Gauge, ListChecks, MessageCircle, Plus, Settings2, ShieldAlert, UserRound, X } from "lucide-react";
 import type { SavedResearch } from "../storage/researchStorage";
@@ -14,6 +15,22 @@ const groups = [
 ] as const;
 export function Sidebar({ open, onClose, onNew, saved, onOpenSaved, onRenameSaved, onDeleteSaved, onClearSaved, activeView, onViewChange, theme, onTheme }: { open: boolean; onClose: () => void; onNew: () => void; saved: SavedResearch[]; onOpenSaved: (item: SavedResearch) => void; onRenameSaved: (item: SavedResearch) => void; onDeleteSaved: (id: string) => void; onClearSaved: () => void; activeView: "research" | "assistant" | "library"; onViewChange: (view: "research" | "assistant" | "library") => void; theme: Theme; onTheme: (theme: Theme) => void }) {
   const [savedQuery, setSavedQuery] = useState("");
+  const { usage, error: usageError } = useGuestUsage();
+  const loginPanel = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    let frame = 0;
+    const showLogin = () => {
+      if (loginPanel.current) loginPanel.current.open = true;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const button = loginPanel.current?.querySelector<HTMLButtonElement>('button[aria-label="Continue with Google"]');
+        button?.focus({ preventScroll: true });
+        button?.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+      });
+    };
+    window.addEventListener('workspace-login-open', showLogin);
+    return () => { cancelAnimationFrame(frame); window.removeEventListener('workspace-login-open', showLogin); };
+  }, []);
   const rootId = (item: SavedResearch) => {
     const seen = new Set<string>(); let current = item;
     while (current.state.parent_research_id && !seen.has(current.id)) {
@@ -34,6 +51,13 @@ export function Sidebar({ open, onClose, onNew, saved, onOpenSaved, onRenameSave
     <aside className={`sidebar no-print ${open ? "translate-x-0" : "-translate-x-full"}`} aria-label="Research navigation">
       <div className="flex items-center justify-between"><div className="flex items-center gap-2"><FindingsLogo /></div><button className="icon-button lg:hidden" onClick={onClose} aria-label="Close navigation"><X size={18} /></button></div>
       <button className="button-primary mt-7 w-full justify-center" onClick={() => { onNew(); onClose(); }}><Plus size={16} /> New Research</button>
+      {cloudEnabled && usage?.guest && <button type="button" className="sidebar-link mt-3 w-full flex-col items-stretch gap-2" aria-label={`${usage.remaining} of ${usage.limit} free research credits remaining. Open login`} onClick={() => window.dispatchEvent(new Event('workspace-login-open'))}>
+        <span className="flex items-center justify-between gap-2"><span>Research credits</span><span className="badge" role="status">{usage.remaining} / {usage.limit}</span></span>
+        <span role="progressbar" aria-label="Remaining research credits" aria-valuemin={0} aria-valuemax={usage.limit ?? 5} aria-valuenow={usage.remaining ?? 0} aria-valuetext={`${usage.remaining} of ${usage.limit} credits remaining`} className="block h-1.5 overflow-hidden rounded-full bg-muted">
+          <span className="block h-full origin-left rounded-full bg-link transition-transform duration-150 motion-reduce:transition-none" style={{ transform: `scaleX(${Math.max(0, Math.min(1, (usage.remaining ?? 0) / (usage.limit || 5)))})` }} />
+        </span>
+      </button>}
+      {cloudEnabled && !usage && <p role="status" className="mt-3 px-3 text-xs text-muted-foreground">{usageError ? 'Credits unavailable' : 'Checking credits...'}</p>}
       <div className="sidebar-content min-h-0 flex-1 overflow-y-auto">
       <button className="sidebar-link mt-4 w-full" aria-current={activeView === "library" ? "page" : undefined} onClick={() => { onViewChange("library"); onClose(); }}><BookOpen size={18} />Research library</button><nav className="mt-5 space-y-4" aria-label="Research sections">{groups.map((group) => <section key={group.title}><p className="eyebrow mb-2 px-3">{group.title}</p><div className="space-y-1">{group.items.map(([label, Icon, href]) => <a key={label} href={href} className="sidebar-link" onClick={() => { onViewChange("research"); onClose(); }} aria-current={activeView === "research" && section === href ? "location" : undefined}><Icon size={18} />{label}</a>)}{group.title === "Research" && <button type="button" className="sidebar-link w-full" aria-current={activeView === "assistant" ? "page" : undefined} onClick={() => { onViewChange("assistant"); onClose(); }}><MessageCircle size={18} />Research Assistant</button>}</div></section>)}</nav>
       <div className="mt-8">
@@ -42,7 +66,7 @@ export function Sidebar({ open, onClose, onNew, saved, onOpenSaved, onRenameSave
           <div className="mt-2 space-y-1"><label className="sr-only" htmlFor="saved-research-search">Search saved research</label><input id="saved-research-search" type="search" className="select mb-2 w-full text-xs" placeholder="Search saved research" value={savedQuery} onChange={event => setSavedQuery(event.target.value)} />{groupedSaved.filter(item => `${item.name || ""} ${item.question}`.toLowerCase().includes(savedQuery.toLowerCase())).map((item) => <div key={item.id} className={`group flex items-center gap-1 ${item.state.parent_research_id ? "ml-3 border-l border-border pl-1" : ""}`}><button className="min-w-0 flex-1 truncate rounded-lg px-2 py-2 text-left text-xs text-muted-foreground hover:bg-muted dark:text-muted-foreground dark:hover:bg-surface" onClick={() => { onOpenSaved(item); onClose(); }} title={item.name || item.question}>{item.name || item.question}<span className="mt-1 block text-[11px] text-muted-foreground">{new Date(item.savedAt).toLocaleDateString()}{item.state.parent_research_id ? " · Follow-up version" : " · Original report"}</span></button><button className="icon-button text-[10px] text-muted-foreground hover:text-link" onClick={() => onRenameSaved(item)} aria-label={`Rename ${item.name || item.question}`}>Rename</button><button className="icon-button text-muted-foreground hover:text-destructive" onClick={() => onDeleteSaved(item.id)} aria-label={`Delete ${item.name || item.question}`}>×</button></div>)}</div>}
       </div>
       </div>
-      <details className="sidebar-footer shrink-0 border-t border-border pt-3"><summary className="cursor-pointer text-sm font-medium">Account &amp; appearance</summary><div className="border-t border-border pt-4"><p className="mb-2 block text-xs text-muted-foreground">Appearance</p><ThemeControl theme={theme} onChange={onTheme} /><div className="mt-4 flex items-center gap-3"><UserRound /><div><p className="text-sm font-medium">{cloudEnabled ? 'Cloud workspace' : 'Local workspace'}</p><p className="text-xs text-muted-foreground">{cloudEnabled ? 'Private research and documents' : 'Saved in this browser'}</p></div></div></div>
+      <details ref={loginPanel} id="workspace-login" className="sidebar-footer shrink-0 border-t border-border pt-3"><summary className="cursor-pointer text-sm font-medium">Account &amp; appearance</summary><div className="border-t border-border pt-4"><p className="mb-2 block text-xs text-muted-foreground">Appearance</p><ThemeControl theme={theme} onChange={onTheme} /><div className="mt-4 flex items-center gap-3"><UserRound /><div><p className="text-sm font-medium">{cloudEnabled ? 'Cloud workspace' : 'Local workspace'}</p><p className="text-xs text-muted-foreground">{cloudEnabled ? 'Private research and documents' : 'Saved in this browser'}</p></div></div></div>
       <AccountPanel /></details>
       <div className="relative mt-2 shrink-0"><InfoPopover sidebar /></div>
     </aside>

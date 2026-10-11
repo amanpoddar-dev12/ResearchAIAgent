@@ -14,6 +14,10 @@ from server.api.models import ResearchRequest
 
 @pytest.fixture
 def private_client(monkeypatch):
+    # Account tests must not start a real alert worker alongside mocked storage.
+    async def idle_alert_worker():
+        await asyncio.Event().wait()
+    monkeypatch.setattr('server.productivity.alert_worker', idle_alert_worker)
     monkeypatch.setattr(workspace, 'configured', lambda: True)
     async def user(request):
         if request.headers.get('Authorization') != 'Bearer valid':
@@ -177,3 +181,41 @@ def test_continuation_loads_only_owned_parent_and_creates_separate_job(private_c
     assert identifier != 'original'
     assert research.jobs[identifier].parent_state.final_report == 'Original report'
     load.assert_awaited_once_with('owner-a', 'research', 'original')
+
+
+def test_guest_can_prepare_login_transfer_while_research_runs(private_client, monkeypatch):
+    research.jobs['running'] = research.ResearchJob(owner_id='owner-a', done=False)
+    remote = AsyncMock(return_value=None)
+    monkeypatch.setattr(workspace, 'remote', remote)
+    response = private_client.post('/api/workspace/transfer', headers={'Authorization': 'Bearer valid'})
+    assert response.status_code == 200
+    assert response.json()['token']
+    assert remote.call_args.kwargs['json']['owner_id'] == 'owner-a'
+    assert not research.jobs['running'].done
+
+
+def test_guest_import_waits_for_active_source_jobs_without_consuming_token(private_client, monkeypatch):
+    async def member(request):
+        return {'id': 'signed-user', 'is_anonymous': False}
+    monkeypatch.setattr(workspace, 'authenticate', member)
+    research.jobs['running'] = research.ResearchJob(owner_id='owner-a', done=False)
+    remote = AsyncMock(return_value=[{'owner_id': 'owner-a'}])
+    monkeypatch.setattr(workspace, 'remote', remote)
+    response = private_client.post('/api/workspace/transfer', json={'token': 'pending-transfer'}, headers={'Authorization': 'Bearer valid'})
+    assert response.status_code == 409
+    assert 'still running or saving' in response.json()['detail']
+    assert remote.await_count == 1
+    assert remote.call_args.args[0] == 'GET'  # Do not consume the transfer token.
+
+
+def test_guest_import_succeeds_after_source_jobs_finish(private_client, monkeypatch):
+    async def member(request):
+        return {'id': 'signed-user', 'is_anonymous': False}
+    monkeypatch.setattr(workspace, 'authenticate', member)
+    research.jobs['complete'] = research.ResearchJob(owner_id='owner-a', done=True)
+    remote = AsyncMock(side_effect=[[{'owner_id': 'owner-a'}], True])
+    monkeypatch.setattr(workspace, 'remote', remote)
+    response = private_client.post('/api/workspace/transfer', json={'token': 'pending-transfer'}, headers={'Authorization': 'Bearer valid'})
+    assert response.status_code == 200
+    assert response.json() == {'imported': True}
+    assert remote.await_count == 2

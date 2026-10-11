@@ -53,9 +53,9 @@ def extract_pdf(path: str) -> dict:
     except Exception as exc:
         raise ValueError("This PDF cannot be processed. It may be damaged or use unsupported encoding. Try another searchable PDF.") from exc
 
-def process_pdf(path: str, result_path: str) -> dict:
+def process_pdf(path: str, result_path: str, timeout: float = 90) -> dict:
     try:
-        subprocess.run([sys.executable, "-m", "app.pdf_documents", path, result_path], timeout=90, check=True, capture_output=True)
+        subprocess.run([sys.executable, "-m", "app.pdf_documents", path, result_path], timeout=timeout, check=True, capture_output=True)
     except subprocess.TimeoutExpired as exc:
         raise ValueError("PDF processing timed out. Split the document and try again.") from exc
     except subprocess.CalledProcessError as exc:

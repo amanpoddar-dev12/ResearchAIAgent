@@ -48,6 +48,7 @@ the application derives it. In Fact Check mode use the exact supplied target cla
 text, including when the evidence contradicts it. In Compare mode set comparison_item
 to an exact supplied item and comparison_criterion to a shared criterion.
 Keep claims atomic and preserve population, timeframe, units, uncertainty, and negation.
+For each addressed sub-question, extract documented methods, sample/population, reported limitations and counter-evidence as separate evidence-linked claims when relevant. Do not infer study quality from a domain or missing metadata.
 Prefer exact source wording for observational claims. Supporting and refuting passages
 are equally important; a citation alone does not establish support. Use unique IDs
 across ALL supplied sources. Do not invent dependencies or sub-question IDs.

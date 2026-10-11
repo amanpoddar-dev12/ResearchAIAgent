@@ -1,4 +1,5 @@
 """Existing plan/research/conflict/report stages with one session coordinator."""
+from app.research_depth import quality_diagnostics
 import asyncio
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -239,6 +240,7 @@ class ResearchAgent:
         state.llm_requests_used = self.llm.requests_used
         state.llm_usage = getattr(self.llm, "usage", {})
         state.status = "complete"
+        audit(state, "quality_diagnostics", "Research quality measurements; counts are session diagnostics, not accuracy scores", **quality_diagnostics(state))
         emit("research_snapshot", "Research state finalized", state.model_dump(mode="json", exclude={"sources": {"__all__": {"content"}}}))
         emit("report_generated", "Final report generated", state.final_report)
         emit("research_progress", "Report ready", {"phase": "complete", "progress": 100})

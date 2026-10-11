@@ -1,4 +1,5 @@
 """Evidence and claim extraction."""
+from app.research_depth import select_passages
 
 import logging
 import re
@@ -17,7 +18,7 @@ class Extractor:
         self.llm = llm
 
     def extract(self, question: str, source: Source) -> list[Finding]:
-        prompt = CLAIM_EXTRACTION.format(question=question, source_id=source.id, content=source.content[:30_000])
+        prompt = CLAIM_EXTRACTION.format(question=question, source_id=source.id, content=select_passages(source.content, question, 30000))
         try:
             result = invoke_structured(self.llm, prompt, ClaimExtraction, task=SOURCE_EXTRACTION)
             return result.findings
@@ -33,7 +34,7 @@ class Extractor:
         selected = [source for source in sources if re.search(r'\d', source.content)][:4]
         if not selected:
             return DataPointExtraction()
-        text = '\n\n'.join(f'--- {source.id} | {source.title} ---\n{source.content[:5000]}' for source in selected)
+        text = '\n\n'.join(f'--- {source.id} | {source.title} ---\n{select_passages(source.content, question, 5000, numerical=True)}' for source in selected)
         try:
             result = invoke_structured(self.llm, DATA_POINT_EXTRACTION.format(
                 question=question, source_id=', '.join(source.id for source in selected), content=text)
@@ -55,7 +56,7 @@ class Extractor:
             # Bounded batches share context once; one failed batch cannot erase prior results.
             for offset in range(0, len(sources), 3):
                 batch = sources[offset:offset + 3]
-                text = "\n\n".join(f"--- {source.id} | {source.title} ---\nSub-questions: {source.sub_question_ids}\n{source.content[:10000]}" for source in batch)
+                text = "\n\n".join(f"--- {source.id} | {source.title} ---\nSub-questions: {source.sub_question_ids}\n{select_passages(source.content, question + " " + strategy, 10000)}" for source in batch)
                 try:
                     result = invoke_structured(self.llm, BATCH_CLAIM_EXTRACTION.format(question=question, sources=text) + strategy,
                                                ClaimExtraction, task=EVIDENCE_EXTRACTION)
@@ -76,7 +77,7 @@ class Extractor:
                 merged.processed_source_ids.extend(source.id for source in batch)
             return merged
         source_text = "\n\n".join(
-            f"--- {source.id} | {source.title} | {source.url} ---\nRetrieved for sub-questions: {source.sub_question_ids}\n{source.content[:5_000]}"
+            f"--- {source.id} | {source.title} | {source.url} ---\nRetrieved for sub-questions: {source.sub_question_ids}\n{select_passages(source.content, question + " " + strategy, 5000)}"
             for source in sources
         )[:50_000]
         try:

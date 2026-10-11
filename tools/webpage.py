@@ -1,5 +1,9 @@
 """Safe, bounded webpage text extraction."""
 
+import tempfile
+from pathlib import Path
+from app.pdf_documents import process_pdf, MAX_UPLOAD_BYTES
+from app.research_depth import select_passages
 import ipaddress
 import httpx
 import logging
@@ -41,7 +45,7 @@ def _open_stream(url, address, timeout):
             yield response
 
 
-def fetch_webpage(url: str, timeout: float = 15.0, max_chars: int = 30_000, *, metadata: dict | None = None) -> str:
+def fetch_webpage(url: str, timeout: float = 15.0, max_chars: int = 30_000, *, metadata: dict | None = None, query: str = "") -> str:
     current = url
     deadline = time.monotonic() + timeout
     try:
@@ -61,9 +65,10 @@ def fetch_webpage(url: str, timeout: float = 15.0, max_chars: int = 30_000, *, m
                     continue
                 response.raise_for_status()
                 content_type = response.headers.get("content-type", "")
-                if not any(kind in content_type for kind in ("text/html", "text/plain", "application/xhtml+xml")):
+                if not any(kind in content_type for kind in ("text/html", "text/plain", "application/xhtml+xml", "application/pdf")):
                     return ""
-                limit = max_chars * 4
+                pdf = "application/pdf" in content_type
+                limit = min(MAX_UPLOAD_BYTES, 8 * 1024 * 1024) if pdf else max_chars * 4
                 content_length = response.headers.get("content-length")
                 if content_length and int(content_length) > limit:
                     raise ValueError("Response exceeds fetch limit")
@@ -73,12 +78,28 @@ def fetch_webpage(url: str, timeout: float = 15.0, max_chars: int = 30_000, *, m
                         break
                     remaining = limit - size
                     if remaining <= 0:
+                        if pdf:
+                            raise ValueError("PDF response exceeds fetch limit")
                         break
+                    if pdf and len(chunk) > remaining:
+                        raise ValueError('PDF response exceeds fetch limit')
                     chunks.append(chunk[:remaining])
                     size += len(chunks[-1])
-                body = b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
+                raw = b"".join(chunks)
+                body = raw.decode(response.encoding or "utf-8", errors="replace") if not pdf else ''
+            if pdf:
+                if not raw.startswith(b'%PDF-') or time.monotonic() >= deadline: return ''
+                with tempfile.TemporaryDirectory(prefix='findings-pdf-') as folder:
+                    document = Path(folder) / 'source.pdf'; document.write_bytes(raw)
+                    result = process_pdf(str(document), str(Path(folder) / 'result.json'), timeout=max(.1, deadline-time.monotonic()))
+                text = '\n\n'.join(f"Page {page['page']}\n{page['text']}" for page in result['pages'])
+                if metadata is not None:
+                    metadata.update({'document_type': 'pdf', 'page_count': result['page_count'], 'warnings': list(result.get('warnings', []))})
+                    if len(text) > max_chars:
+                        metadata['warnings'].append('Collected text is a bounded selection, not the complete document.')
+                return select_passages(text, query, max_chars) if query else text[:max_chars]
             if "html" not in content_type:
-                return body[:max_chars]
+                return select_passages(body, query, max_chars) if query else body[:max_chars]
             soup = BeautifulSoup(body, "html.parser")
             if metadata is not None:
                 if soup.title:
@@ -97,7 +118,10 @@ def fetch_webpage(url: str, timeout: float = 15.0, max_chars: int = 30_000, *, m
                 metadata["reference_urls"] = list(dict.fromkeys(references))[:6]
             for tag in soup(["script", "style", "noscript", "nav", "footer", "header", "form"]):
                 tag.decompose()
-            return " ".join(soup.get_text(" ", strip=True).split())[:max_chars]
+            text = "\n\n".join(" ".join(part.split()) for part in soup.get_text("\n", strip=True).splitlines() if part.strip())
+            if metadata is not None and len(text) > max_chars:
+                metadata.setdefault('warnings', []).append('Collected text is a bounded selection, not the complete document.')
+            return select_passages(text, query, max_chars) if query else text[:max_chars]
         raise ValueError("Too many redirects")
     except (httpx.HTTPError, OSError, ValueError, UnicodeError) as exc:
         logger.warning("Could not fetch webpage (%s)", type(exc).__name__)

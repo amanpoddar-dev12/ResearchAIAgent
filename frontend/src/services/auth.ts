@@ -11,14 +11,19 @@ let initializing: Promise<Session | null> | undefined;
 export function initializeAuth(): Promise<Session | null> {
   if (!cloudEnabled) return Promise.resolve(null);
   if (!supabase) return Promise.reject(new Error('Supabase configuration is incomplete. See the setup guide.'));
-  return initializing ??= (async () => {
+  const restore = async () => {
     const { data, error } = await supabase!.auth.getSession();
     if (error) throw error;
     if (data.session) return data.session;
     const guest = await supabase!.auth.signInAnonymously();
     if (guest.error) throw guest.error;
     return guest.data.session;
-  })().catch((error) => { initializing = undefined; throw error; });
+  };
+  // Serialize the get-or-create operation across tabs, not just within this module.
+  // Supabase persists the session; recheck it inside the lock before creating a guest.
+  return initializing ??= (async () => navigator.locks
+    ? await navigator.locks.request(`findingsai-guest:${url}`, restore)
+    : await restore())().finally(() => { initializing = undefined; });
 }
 
 export async function authHeaders(): Promise<Record<string, string>> {

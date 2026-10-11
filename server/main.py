@@ -91,8 +91,6 @@ async def workspace_transfer(request: Request):
     import hashlib
     from datetime import datetime, timedelta, timezone
     if user.get('is_anonymous'):
-        if any(job.owner_id == user['id'] and not job.done for job in jobs.values()):
-            raise HTTPException(409, 'Wait for your research to finish before signing in to an existing account.')
         token = secrets.token_urlsafe(32)
         await workspace.remote('POST', '/rest/v1/guest_transfers', json={'token_hash': hashlib.sha256(token.encode()).hexdigest(),
             'owner_id': user['id'], 'expires_at': (datetime.now(timezone.utc)+timedelta(minutes=15)).isoformat()})
@@ -107,8 +105,13 @@ async def workspace_transfer(request: Request):
             raise ValueError()
     except (ValueError, KeyError, TypeError):
         raise HTTPException(400, 'Invalid transfer request.') from None
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    transfers = await workspace.remote('GET', f'/rest/v1/guest_transfers?token_hash=eq.{token_hash}&select=owner_id')
+    # Login does not move ownership. Delay the actual import until guest writes finish.
+    if transfers and any(job.owner_id == transfers[0]['owner_id'] and not job.done for job in jobs.values()):
+        raise HTTPException(409, 'Your guest research is still running or saving. Wait for it to finish, then retry Import guest workspace.')
     claimed = await workspace.remote('POST', '/rest/v1/rpc/claim_guest_workspace', json={
-        'p_token': hashlib.sha256(token.encode()).hexdigest(), 'p_target': user['id']})
+        'p_token': token_hash, 'p_target': user['id']})
     if not claimed:
         raise HTTPException(410, 'Guest transfer expired or was already used. Return to the guest session to retry.')
     # Guest jobs must not retain access to records transferred to another identity.

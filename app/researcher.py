@@ -1,4 +1,5 @@
 """Bounded iterative research; workers return values, one coordinator commits them."""
+from app.research_depth import quality_diagnostics, prioritize_gaps
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -79,21 +80,24 @@ class Researcher:
             if reason:
                 filtered.append({"url": url, "reason": reason})
                 continue
-            if not source.content or (getattr(self.llm, "supports_task_routing", False) and fetches < (1 if mode.label == "Quick" else 3)):
+            if not source.content or (getattr(self.llm, "supports_task_routing", False) and fetches < (1 if mode.label == "Quick" else 4)):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError()
                 metadata = {}
                 fetches += 1
-                document = fetch_webpage(result.url, timeout=min(10, remaining), metadata=metadata)
+                document = fetch_webpage(result.url, timeout=min(10, remaining), max_chars=120000, metadata=metadata, query=query)
                 if document:
                     source.content = document
                     source.retrieval_method = "fetch"
+                    source.credibility_notes = "; ".join(metadata.get("warnings", [])) or None
                     source.publication_date = metadata.get("publication_date") or source.publication_date
                     source.primary_basis = metadata.get("primary_basis")
                     source.reference_urls = metadata.get("reference_urls", [])
                     source.title = metadata.get("title") or source.title
                     source.source_type = infer_source_type(source)
+                elif source.content:
+                    source.credibility_notes = 'Full text unavailable; only a discovery snippet was collected.'
                 elif linked_reference:
                     filtered.append({"url": url, "reason": "Linked document could not be retrieved"})
                     continue
@@ -220,7 +224,7 @@ class Researcher:
                             continue
                         source.id, source.sub_question_ids = f"S{len(state.sources)+1}", qids
                         state.sources.append(source)
-                        audit(state, "source_kept", source.title, source_id=source.id, url=source.url)
+                        audit(state, "source_kept", source.title, source_id=source.id, url=source.url, retrieval=source.retrieval_method, characters=len(source.content))
                         emit("source_found", f"Source discovered: {source.domain}", source.model_copy(deep=True))
                         emit("source_evaluated", f"Evaluated {source.title}", {"source_id": source.id, "quality": source.quality.model_dump(), "status": "evaluated"})
                     slots -= len(wave)
@@ -241,6 +245,7 @@ class Researcher:
                     result = await bounded_call(executor, deadline, self.extractor.extract_evidence, state.question.question, eligible, strategy)
                     merge_extraction(state, result)
                     state.extraction_completed.extend(result.processed_source_ids if getattr(self.llm, "supports_task_routing", False) else [source.id for source in eligible])
+                    audit(state, "extraction_coverage", "Evidence extraction coverage", proposed_claims=len(result.findings), proposed_evidence=len(result.evidence), processed_sources=result.processed_source_ids, **quality_diagnostics(state))
                     if getattr(self.llm, "supports_task_routing", False):
                         claims = [{"claim_id": claim.id, "claim": claim.claim,
                                    "evidence": [item.model_dump() for item in state.evidence if item.id in claim.evidence_ids and item.id not in {review.evidence_id for review in claim.evidence_assessments}]}
@@ -313,7 +318,7 @@ class Researcher:
                     key = entry[0].strip().casefold()
                     if key and key not in state.searched_queries:
                         unique.setdefault(key, entry)
-                pending = list(unique.values())
+                pending = prioritize_gaps(state, list(unique.values()))
                 pending.sort(key=lambda entry: any(qid in state.searched_sub_questions for qid in entry[2]))
                 for query, reason, qids in pending:
                     audit(state, "expansion", "Targeted evidence gap", query=query, reason=reason, sub_question_ids=qids)
