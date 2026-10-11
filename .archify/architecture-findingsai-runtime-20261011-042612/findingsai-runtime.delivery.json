@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "b6c6fa41-d0e4-40e1-92a1-dbe9d25d4833",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "C:\\Users\\HP\\.codex\\worktrees\\aea3\\AiResearchAgent\\.archify\\architecture-findingsai-runtime-20261011-042612\\candidate.json",
+  "output": "C:\\Users\\HP\\.codex\\worktrees\\aea3\\AiResearchAgent\\.archify\\architecture-findingsai-runtime-20261011-042612\\findingsai-runtime.html",
+  "specification": {
+    "sha256": "55bb0fe7187267cfeb908d42354a81e4ca9ec4817602c286489e2b1bd1e5ac29",
+    "bytes": 13816
+  },
+  "artifact": {
+    "sha256": "5b6090def736750d0944c4e4822e1a1290a409afd89f8dcde24819bf3631940e",
+    "bytes": 781085
+  }
+}

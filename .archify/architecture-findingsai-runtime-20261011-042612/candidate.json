@@ -1,0 +1,522 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "FindingsAI runtime architecture",
+    "output": ".archify/architecture-findingsai-runtime-20261011-042612/findingsai-runtime.html",
+    "quality_profile": "showcase",
+    "locale": "en",
+    "repository": {
+      "url": "https://github.com/amanpoddar-dev12/ResearchAIAgent.git",
+      "revision": "b071168ca0e9876dbddb3a2e3bc5d448bacd66fb",
+      "provider": "github",
+      "link_mode": "web"
+    }
+  },
+  "components": [
+    {
+      "id": "workspace",
+      "type": "frontend",
+      "label": "Research workspace",
+      "sublabel": "React / Vite browser UI",
+      "pos": [
+        30,
+        220
+      ],
+      "size": [
+        210,
+        76
+      ],
+      "sources": [
+        {
+          "path": "frontend/src/App.tsx",
+          "line": 1,
+          "end_line": 35
+        },
+        {
+          "path": "frontend/src/services/api.ts",
+          "line": 5,
+          "end_line": 36
+        },
+        {
+          "path": "frontend/src/services/auth.ts",
+          "line": 6,
+          "end_line": 28
+        }
+      ]
+    },
+    {
+      "id": "api",
+      "type": "security",
+      "label": "FastAPI & ownership",
+      "sublabel": "Bearer verified when cloud enabled",
+      "pos": [
+        345,
+        220
+      ],
+      "size": [
+        210,
+        76
+      ],
+      "sources": [
+        {
+          "path": "server/main.py",
+          "line": 42,
+          "end_line": 74
+        },
+        {
+          "path": "server/workspace.py",
+          "line": 37,
+          "end_line": 58
+        },
+        {
+          "path": "server/main.py",
+          "line": 242,
+          "end_line": 259
+        }
+      ],
+      "tag": "API trust gate"
+    },
+    {
+      "id": "sessions",
+      "type": "messagebus",
+      "label": "Research jobs & SSE",
+      "sublabel": "Async tasks / retained session events",
+      "pos": [
+        645,
+        220
+      ],
+      "size": [
+        210,
+        76
+      ],
+      "sources": [
+        {
+          "path": "server/api/research.py",
+          "line": 28,
+          "end_line": 58
+        },
+        {
+          "path": "server/api/research.py",
+          "line": 95,
+          "end_line": 129
+        },
+        {
+          "path": "server/api/research.py",
+          "line": 133,
+          "end_line": 176
+        }
+      ]
+    },
+    {
+      "id": "coordinator",
+      "type": "backend",
+      "label": "Research coordinator",
+      "sublabel": "Plan / gather / verify / synthesize",
+      "pos": [
+        945,
+        220
+      ],
+      "size": [
+        210,
+        76
+      ],
+      "sources": [
+        {
+          "path": "server/api/research.py",
+          "line": 190,
+          "end_line": 226
+        },
+        {
+          "path": "app/agent.py",
+          "line": 24,
+          "end_line": 67
+        },
+        {
+          "path": "app/researcher.py",
+          "line": 41,
+          "end_line": 95
+        }
+      ]
+    },
+    {
+      "id": "assistant",
+      "type": "backend",
+      "label": "Assistant & PDF context",
+      "sublabel": "Session RAG / isolated PDF parsing",
+      "pos": [
+        645,
+        480
+      ],
+      "size": [
+        210,
+        76
+      ],
+      "sources": [
+        {
+          "path": "server/api/research.py",
+          "line": 354,
+          "end_line": 440
+        },
+        {
+          "path": "app/assistant_context.py",
+          "line": 47,
+          "end_line": 87
+        },
+        {
+          "path": "server/main.py",
+          "line": 317,
+          "end_line": 351
+        }
+      ]
+    },
+    {
+      "id": "gateway",
+      "type": "backend",
+      "label": "LLM clients & budgets",
+      "sublabel": "Task routing / schema validation",
+      "pos": [
+        945,
+        480
+      ],
+      "size": [
+        210,
+        76
+      ],
+      "sources": [
+        {
+          "path": "app/llm/router.py",
+          "line": 25,
+          "end_line": 93
+        },
+        {
+          "path": "app/llm/providers.py",
+          "line": 96,
+          "end_line": 159
+        },
+        {
+          "path": "server/api/research.py",
+          "line": 361,
+          "end_line": 439
+        }
+      ]
+    },
+    {
+      "id": "local",
+      "type": "database",
+      "label": "Browser history",
+      "sublabel": "IndexedDB / local session storage",
+      "pos": [
+        30,
+        480
+      ],
+      "size": [
+        210,
+        76
+      ],
+      "sources": [
+        {
+          "path": "frontend/src/storage/researchStorage.ts",
+          "line": 19,
+          "end_line": 49
+        },
+        {
+          "path": "frontend/src/storage/chatStorage.ts",
+          "line": 14,
+          "end_line": 41
+        },
+        {
+          "path": "frontend/src/services/auth.ts",
+          "line": 6,
+          "end_line": 8
+        }
+      ]
+    },
+    {
+      "id": "identity",
+      "type": "security",
+      "label": "Supabase Auth",
+      "sublabel": "Google PKCE / anonymous sessions",
+      "pos": [
+        345,
+        20
+      ],
+      "size": [
+        210,
+        76
+      ],
+      "sources": [
+        {
+          "path": "frontend/src/services/auth.ts",
+          "line": 14,
+          "end_line": 47
+        },
+        {
+          "path": "server/workspace.py",
+          "line": 37,
+          "end_line": 58
+        }
+      ]
+    },
+    {
+      "id": "evidence",
+      "type": "external",
+      "label": "Tavily & public web",
+      "sublabel": "Search / bounded document fetch",
+      "pos": [
+        945,
+        20
+      ],
+      "size": [
+        210,
+        76
+      ],
+      "sources": [
+        {
+          "path": "app/researcher.py",
+          "line": 41,
+          "end_line": 95
+        },
+        {
+          "path": "tools/web_search.py",
+          "line": 19,
+          "end_line": 54
+        },
+        {
+          "path": "tools/webpage.py",
+          "line": 14,
+          "end_line": 62
+        }
+      ],
+      "tag": "Untrusted content"
+    },
+    {
+      "id": "clouddata",
+      "type": "database",
+      "label": "Supabase data",
+      "sublabel": "Postgres RLS / private PDF Storage",
+      "pos": [
+        345,
+        740
+      ],
+      "size": [
+        210,
+        76
+      ],
+      "sources": [
+        {
+          "path": "server/workspace.py",
+          "line": 17,
+          "end_line": 33
+        },
+        {
+          "path": "server/api/research.py",
+          "line": 241,
+          "end_line": 251
+        },
+        {
+          "path": "supabase/migrations/202610090001_workspace.sql",
+          "line": 1,
+          "end_line": 45
+        }
+      ],
+      "tag": "Privileged backend writes"
+    },
+    {
+      "id": "models",
+      "type": "external",
+      "label": "Gemini & Groq APIs",
+      "sublabel": "Generation / extraction / review",
+      "pos": [
+        945,
+        740
+      ],
+      "size": [
+        210,
+        76
+      ],
+      "sources": [
+        {
+          "path": "app/llm/routing.py",
+          "line": 25,
+          "end_line": 43
+        },
+        {
+          "path": "app/llm/providers.py",
+          "line": 130,
+          "end_line": 159
+        },
+        {
+          "path": "app/config.py",
+          "line": 10,
+          "end_line": 20
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "security-group",
+      "label": "Browser: untrusted client state",
+      "wraps": [
+        "workspace",
+        "local"
+      ],
+      "pad": 22
+    },
+    {
+      "kind": "security-group",
+      "label": "Python server: ownership checks and backend-only secrets",
+      "wraps": [
+        "api",
+        "sessions",
+        "coordinator",
+        "assistant",
+        "gateway"
+      ],
+      "pad": 24
+    },
+    {
+      "kind": "security-group",
+      "label": "Cloud persistence: owned reads / private bucket",
+      "wraps": [
+        "clouddata"
+      ],
+      "pad": 22
+    }
+  ],
+  "connections": [
+    {
+      "id": "request",
+      "from": "workspace",
+      "to": "api",
+      "label": "POST research",
+      "variant": "emphasis"
+    },
+    {
+      "id": "start",
+      "from": "api",
+      "to": "sessions",
+      "label": "Owned job",
+      "variant": "emphasis"
+    },
+    {
+      "id": "execute",
+      "from": "sessions",
+      "to": "coordinator",
+      "label": "Run thread",
+      "variant": "emphasis"
+    },
+    {
+      "id": "generate",
+      "from": "coordinator",
+      "to": "gateway",
+      "label": "Model tasks",
+      "variant": "emphasis"
+    },
+    {
+      "id": "providers",
+      "from": "gateway",
+      "to": "models",
+      "label": "HTTPS APIs",
+      "variant": "emphasis"
+    },
+    {
+      "id": "verify",
+      "from": "api",
+      "to": "identity",
+      "label": "Verify /user",
+      "variant": "security"
+    },
+    {
+      "id": "lookup",
+      "from": "coordinator",
+      "to": "evidence",
+      "label": "Search / fetch"
+    },
+    {
+      "id": "persist",
+      "from": "api",
+      "to": "clouddata",
+      "label": "Owned REST / Storage",
+      "variant": "security"
+    },
+    {
+      "id": "chat",
+      "from": "api",
+      "to": "assistant",
+      "label": "Chat / PDF",
+      "variant": "dashed"
+    },
+    {
+      "id": "chat-model",
+      "from": "assistant",
+      "to": "gateway",
+      "label": "Gemini context",
+      "variant": "dashed"
+    },
+    {
+      "id": "local-history",
+      "from": "workspace",
+      "to": "local",
+      "label": "Local history",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Primary path & result",
+      "items": [
+        "Question \u00e2\u2020\u2019 FastAPI \u00e2\u2020\u2019 session job \u00e2\u2020\u2019 coordinator \u00e2\u2020\u2019 model clients.",
+        "Search, evidence validation and report synthesis run within bounded research stages.",
+        "Job events and the final report return to the browser over SSE; the return is omitted to keep one readable path. [server/api/research.py:269\u00e2\u20ac\u201c292]"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Authentication is conditional",
+      "items": [
+        "Cloud mode verifies the bearer against Supabase /auth/v1/user, then checks job and record ownership.",
+        "Browser Google sign-in uses PKCE; anonymous users have owned guest workspaces and a five-run research allowance.",
+        "With Supabase entirely unconfigured, research and assistant routes retain local unauthenticated mode. [server/main.py:42\u00e2\u20ac\u201c74; server/workspace.py:78\u00e2\u20ac\u201c94]"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Persistence & isolation",
+      "items": [
+        "Research checkpoints and final state are written by the server job worker, not by the pure research coordinator.",
+        "Supabase records use RLS; server requests use backend-only privileged credentials with explicit owner filters.",
+        "PDF reads follow current workspace record ownership; browser IndexedDB retains local history/drafts. [server/api/research.py:139\u00e2\u20ac\u201c152,241\u00e2\u20ac\u201c251; server/workspace.py:62\u00e2\u20ac\u201c76; supabase/migrations/20261010200448_pdf_transfer_read_ownership.sql:1\u00e2\u20ac\u201c4]"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Assistant & uploaded PDFs",
+      "items": [
+        "Hybrid chat retrieves only its active context, sends bounded history and streams Gemini answers with validated citation IDs.",
+        "PDF uploads are capped at 25 MiB; pypdf runs in a disposable subprocess with a 90-second timeout. Extraction becomes page-level chat context.",
+        "Collection chat can combine owned reports, conversations and PDFs. This is keyword RAG, not a vector database. [server/api/research.py:354\u00e2\u20ac\u201c439; app/pdf_documents.py:8\u00e2\u20ac\u201c19,56\u00e2\u20ac\u201c64; server/productivity.py:69\u00e2\u20ac\u201c139]"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "External inputs & model routing",
+      "items": [
+        "Tavily discovers URLs; the fetcher rejects private addresses, pins DNS, rechecks redirects and limits content. Retrieved content is untrusted evidence.",
+        "Gemini handles planning, synthesis, conflict analysis and chat. Groq handles extraction, source quality and review tasks.",
+        "Model output is parsed into schemas and checked against evidence; it is not executed. [tools/webpage.py:14\u00e2\u20ac\u201c62; app/llm/routing.py:25\u00e2\u20ac\u201c45; app/llm/router.py:65\u00e2\u20ac\u201c94; app/evidence.py:13\u00e2\u20ac\u201c42]"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Secondary capabilities & limits",
+      "items": [
+        "Collections, section feedback, expiring report-share links, source-review checkpoints and opt-in alerts reuse the same API and owned persistence.",
+        "Alerts run in the backend's lifespan worker, not an external scheduler. Public share reads are capability-based exceptions to authenticated routes.",
+        "Jobs and replay buffers are process-local: no Redis, distributed queue or dedicated worker service is shown. Actual deployed instances and ingress limits are not verified. [server/main.py:20\u00e2\u20ac\u201c32; server/productivity.py:142\u00e2\u20ac\u201c273; server/api/research.py:53\u00e2\u20ac\u201c69]"
+      ]
+    }
+  ]
+}
