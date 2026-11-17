@@ -50,7 +50,8 @@ def select_passages(text: str, question: str, limit: int = 10000, *, numerical: 
     return '\n\n'.join(chunks[index] for index in sorted(selected))
 
 def evidence_packets(state) -> list[dict]:
-    sources = {source.id: source for source in state.sources}
+    from app.evidence import source_rejection
+    sources = {source.id: source for source in state.sources if not source_rejection(state, source.id)}
     evidence = {item.id: item for item in state.evidence if item.source_id in sources and item.excerpt and item.excerpt in sources[item.source_id].content}
     tasks = state.plan.sub_question_tasks if state.plan else []
     packets = []
@@ -61,7 +62,7 @@ def evidence_packets(state) -> list[dict]:
         linked = list(dict.fromkeys(key for claim in claims for key in claim.evidence_ids if key in evidence))
         ids = list(dict.fromkeys(evidence[key].source_id for key in linked))
         packets.append({'question_id': task.id if task else 'main', 'question': task.question if task else state.question.question,
-            'claims': [{key: getattr(claim, key) for key in ('id', 'claim', 'evidence_ids', 'evidence_status', 'importance')} for claim in sorted(claims, key=lambda claim: {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}[claim.importance])],
+            'claims': [{**{key: getattr(claim, key) for key in ('id', 'claim', 'evidence_ids', 'evidence_status', 'importance')}, 'assessments': [item.model_dump() for item in claim.evidence_assessments]} for claim in sorted(claims, key=lambda claim: {'critical': 0, 'high': 1, 'medium': 2, 'low': 3}[claim.importance])],
             'evidence': [{field: getattr(evidence[key], field) for field in ('id', 'source_id', 'excerpt', 'relation', 'strength')} for key in linked],
             'sources': [{'id': sid, 'title': sources[sid].title, 'url': sources[sid].url,
                 'retrieval': sources[sid].retrieval_method, 'publication_date': sources[sid].publication_date,
@@ -87,7 +88,11 @@ def packet_context(state, max_chars: int = 60000) -> str:
     used, selected = 2, []
     for position, packet in enumerate(packets):
         allocation = (max_chars - used - 2 * (len(packets) - position)) // max(1, len(packets) - position)
-        packet = {**packet, 'claims': packet['claims'][:8], 'evidence': packet['evidence'][:16], 'measurements': packet['measurements'][:12]}
+        packet = {**packet, 'claims': packet['claims'][:8], 'measurements': packet['measurements'][:12]}
+        available = {item['id'] for item in packet['evidence']}
+        representatives = list(dict.fromkeys(next((eid for eid in claim['evidence_ids'] if eid in available), '') for claim in packet['claims']))
+        linked = {eid for claim in packet['claims'] for eid in claim['evidence_ids']}
+        packet['evidence'] = sorted(packet['evidence'], key=lambda item: (item['id'] not in representatives, item['id'] not in linked))[:16]
         text = json.dumps(packet, ensure_ascii=False, default=str)
         while len(text) > allocation and packet['claims']:
             packet['claims'] = packet['claims'][:-1]

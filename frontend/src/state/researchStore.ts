@@ -29,6 +29,13 @@ function upsert<T>(items: T[], item: T, key: (value: T) => string | undefined): 
   return index < 0 ? [...items, item] : items.map((candidate, candidateIndex) => candidateIndex === index ? item : candidate);
 }
 
+function preserveSourceText(incoming: ResearchSource[], previous: ResearchSource[]): ResearchSource[] {
+  return incoming.map(source => {
+    const old = previous.find(item => item.id === source.id && item.url === source.url);
+    return source.content || !old?.content ? source : { ...source, content: old.content };
+  });
+}
+
 export function researchReducer(state: ResearchSession, event: ResearchEvent | { type: "reset" } | { type: "error"; message: string } | { type: "restore"; session: ResearchSession }): ResearchSession {
   if (event.type === "reset") return initialResearchSession;
   if (event.type === "error") return { ...state, status: "error", error: event.message };
@@ -57,7 +64,8 @@ export function researchReducer(state: ResearchSession, event: ResearchEvent | {
   if (researchEvent.type === "research_snapshot") {
     const snapshot = researchEvent.data as ResearchState;
     next.snapshot = snapshot;
-    next.sources = snapshot.sources;
+    next.sources = preserveSourceText(snapshot.sources, state.sources);
+    next.snapshot = { ...snapshot, sources: next.sources };
     next.findings = snapshot.findings;
     next.evidence = snapshot.evidence || [];
     next.conflicts = snapshot.conflicts;
@@ -67,7 +75,8 @@ export function researchReducer(state: ResearchSession, event: ResearchEvent | {
   if (researchEvent.type === "complete") {
     const payload = researchEvent.data as { state: ResearchState; report: string };
     next.snapshot = payload.state;
-    next.sources = payload.state.sources;
+    next.sources = preserveSourceText(payload.state.sources, state.sources);
+    next.snapshot = { ...payload.state, sources: next.sources };
     next.findings = payload.state.findings;
     next.evidence = payload.state.evidence || [];
     next.conflicts = payload.state.conflicts;

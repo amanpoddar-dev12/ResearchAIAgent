@@ -113,16 +113,23 @@ class HTTPProvider:
             self.record_usage(getattr(self._local, "task", "unknown"), data.get("usage") or data.get("usageMetadata"))
             return self._extract_text(data), status
         except (ValueError, KeyError, TypeError) as exc:
-            raise ProviderResponseError(self.provider, "http_request", "provider returned invalid JSON", status) from exc
+            reason = "output token limit reached" if str(exc) == "output token limit reached" else "provider returned invalid JSON or missing text"
+            raise ProviderResponseError(self.provider, "http_request", reason, status) from None
 
     @staticmethod
     def _extract_text(data: dict[str, Any]) -> str:
         choices = data.get("choices")
-        if choices and choices[0].get("message", {}).get("content"):
-            return str(choices[0]["message"]["content"])
+        if choices:
+            if choices[0].get("finish_reason") == "length":
+                raise ValueError("output token limit reached")
+            text = choices[0].get("message", {}).get("content")
+            if text: return str(text)
         candidates = data.get("candidates")
-        if candidates and candidates[0].get("content", {}).get("parts"):
-            return str(candidates[0]["content"]["parts"][0].get("text", ""))
+        if candidates:
+            if candidates[0].get("finishReason") == "MAX_TOKENS":
+                raise ValueError("output token limit reached")
+            text = ''.join(part.get('text', '') for part in candidates[0].get('content', {}).get('parts', []) if not part.get('thought'))
+            if text: return text
         raise ValueError("missing response text")
 
 

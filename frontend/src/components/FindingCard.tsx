@@ -6,7 +6,7 @@ import { VerificationBadge } from "./VerificationBadge";
 export function FindingCard({ finding, sources, evidence, onPreview }: { finding: Finding; sources: ResearchSource[]; evidence: Evidence[]; onPreview: (source: ResearchSource) => void }) {
   return <article className="card">
     <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs font-medium"><span className="uppercase tracking-wider text-link">{finding.category}</span><VerificationBadge status={finding.evidence_status} /></div>
-    <p className="font-medium leading-7">{finding.claim}</p><p className="mt-2 text-sm leading-6 text-muted-foreground">{finding.explanation}</p>
+    <p className="font-medium leading-7">{finding.claim}</p><p className="mt-2 text-sm leading-6 text-muted-foreground"><span className="block text-xs">AI explanation — verify against the excerpts</span>{finding.explanation}</p>
     {Boolean(finding.depends_on?.length) && <p className="mt-2 text-xs text-muted-foreground">Depends on: {finding.depends_on!.join(", ")}</p>}
     {finding.dependency_rejected && <p className="mt-2 text-xs text-warning">Invalid dependency rejected; this claim remains Unverified.</p>}
     <div className="mt-3 flex gap-2">{finding.source_ids.map((id) => { const index = sources.findIndex((source) => source.id === id); return index >= 0 ? <Citation key={id} n={index + 1} onClick={() => onPreview(sources[index])} /> : null; })}</div>

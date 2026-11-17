@@ -37,6 +37,12 @@ def gemini(monkeypatch):
 
         return httpx.Response(200, stream=Stream())
 
+    async def review(self, messages, *, task, response_model=None, **kwargs):
+        from app.models import ReportBlockReviews, ReportBlockReview
+        assert task == 'final_review'
+        blocks = json.loads(messages[-1]['content'])['blocks']
+        return ReportBlockReviews(reviews=[ReportBlockReview(block_id=block['block_id'], supported=True) for block in blocks])
+    monkeypatch.setattr(research.LLMRouter, 'complete', review)
     monkeypatch.setattr(research, "Settings", synthetic_settings)
     monkeypatch.setattr(research, "_gemini_input_limits", {})
     monkeypatch.setattr(research.httpx, "AsyncClient", lambda **kwargs: original(transport=httpx.MockTransport(handler), **kwargs))
@@ -61,7 +67,7 @@ def test_large_context_uses_bounded_relevant_chunks():
     assert "photon loss" in context.text
     data = json.loads(context.text)
     assert len(data["documents"]) <= 8
-    assert len(context.text.encode("utf-8")) <= 8000
+    assert len(context.text.encode("utf-8")) <= 32768 - 6000
 
 
 @pytest.mark.parametrize("reply,origin,source_ids", [

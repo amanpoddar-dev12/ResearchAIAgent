@@ -146,6 +146,7 @@ class SearchResult(BaseModel):
 
 
 class Source(BaseModel):
+    _discovery_relevance: float | None = PrivateAttr(default=None)
     id: str
     title: str
     url: str
@@ -473,6 +474,7 @@ class ConflictAssessment(BaseModel):
 
 class ReportDraft(BaseModel):
     _approved_blocks: set[str] = PrivateAttr(default_factory=set)
+    _general_background: str = PrivateAttr(default="")
     title: str
     executive_summary: str
     key_findings: list[str] = Field(default_factory=list)

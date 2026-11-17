@@ -44,6 +44,7 @@ async def bounded_call(executor, deadline, function, *args, **kwargs):
 
 
 def coverage_gaps(state):
+    from app.research_quality import recovery_queries
     covered = set()
     gaps = []
     sources = {source.id: source for source in state.sources}
@@ -62,7 +63,7 @@ def coverage_gaps(state):
     question_gaps = []
     for task in tasks:
         if task.id not in covered:
-            variants = [task.query, task.query + " primary source evidence", task.query + " original study methods limitations", task.query + " conflicting evidence replication", task.query + " official dataset measurements"]
+            variants = recovery_queries(state, task)
             query = next((query for query in variants if query.casefold() not in state.searched_queries), variants[-1])
             question_gaps.append((query, f"{task.id}: sub-question has no verified evidence", [task.id]))
     coverage = len(covered.intersection(task.id for task in tasks)) / len(tasks) if tasks else 0

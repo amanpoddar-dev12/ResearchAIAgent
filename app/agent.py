@@ -1,14 +1,15 @@
 """Existing plan/research/conflict/report stages with one session coordinator."""
-from app.research_depth import quality_diagnostics
+from app.research_depth import quality_diagnostics, packet_context
+from app.research_quality import answer_checklist, research_diagnosis, report_usefulness
 import asyncio
 import json
 from concurrent.futures import ThreadPoolExecutor
 import time
 from app.config import Settings
 from app.llm import LLMRouter, invoke_structured
-from app.llm.routing import INDEPENDENT_REVIEW, QUESTION_ANALYSIS
+from app.llm.routing import INDEPENDENT_REVIEW, QUESTION_ANALYSIS, GAP_ANALYSIS
 from app.models import (ResearchQuestion, ResearchState, SourceFilters, BudgetOverrides, ResearchPlan,
-    ReportDraft, QuestionAnalysis, Verification, EvidenceAssessmentBatch, ConflictAssessment, ResearchGap)
+    ReportDraft, QuestionAnalysis, Verification, EvidenceAssessmentBatch, ConflictAssessment, ResearchGap, GapAssessment)
 from app.modes import MODES, ModeName
 from app.evidence import reject, source_rejection, evidence_conflicts, validate_evidence, apply_assessments
 from app.planner import Planner, refine_question
@@ -16,7 +17,7 @@ from app.researcher import Researcher
 from app.synthesizer import Synthesizer, build_structured_report, render_report
 from app.research_control import audit, bounded_call, coverage_gaps
 from app.prompts import (EVIDENCE_EVALUATION as EVIDENCE_EVALUATION_PROMPT,
-    QUESTION_ANALYSIS as QUESTION_ANALYSIS_PROMPT)
+    QUESTION_ANALYSIS as QUESTION_ANALYSIS_PROMPT, PREPUBLICATION_QUALITY)
 
 
 GeminiClient = LLMRouter
@@ -60,7 +61,8 @@ class ResearchAgent:
         started = time.monotonic()
         deadline = started + state.max_wall_seconds
         self.llm.deadline = deadline
-        self.llm.reserved_final_calls = min(3, max(0, self.llm.max_requests - 2))
+        self.llm.reserved_final_calls = min(2, max(0, self.llm.max_requests - 1))
+        self.llm.recovery_reserve = 3 if mode != "quick" and self.llm.max_requests >= 16 and self.settings.additional_research_rounds else 0
         state.semantic_validation_required = bool(getattr(self.llm, "supports_task_routing", False))
         state.relevance_threshold = config.relevance_threshold
         try:
@@ -74,7 +76,7 @@ class ResearchAgent:
         refine_question(state.question)
         audit(state, "refinement", state.question.refined_question, original=state.question.question, assumptions=state.question.assumptions)
         emit("question_refined", "Research scope clarified", state.question.model_dump())
-        if getattr(self.llm, "supports_task_routing", False):
+        if getattr(self.llm, "supports_task_routing", False) and self.llm.max_requests >= 12:
             try:
                 analysis = await bounded_call(
                     executor, deadline, invoke_structured, self.llm,
@@ -97,10 +99,11 @@ class ResearchAgent:
         except TimeoutError:
             state.plan = ResearchPlan(objective=state.question.question, search_queries=[state.question.question])
             self.researcher.record_timeout(state, started)
+        audit(state, "answer_checklist", "Planned questions define answer coverage, not established findings", questions=[task.model_dump() for task in state.plan.sub_question_tasks] or state.plan.sub_questions)
         emit("planning_completed", "Research plan created", state.plan.model_copy(deep=True))
         emit("research_progress", "Plan ready", {"phase": "search", "progress": 20})
         if deadline - time.monotonic() > 0.01:
-            final_seconds = min(30, max(0, deadline - time.monotonic()) * .2)
+            final_seconds = min(60, max(0, deadline - time.monotonic()) * .4)
             collection_deadline = max(time.monotonic(), deadline - final_seconds)
             audit(state, "budget_allocation", "Reserved time for evidence review and final report", seconds=final_seconds)
             original_overrides = state.budget_overrides
@@ -109,7 +112,11 @@ class ResearchAgent:
             if self.review_checkpoint:
                 state.budget_overrides = original_overrides.model_copy(update={'max_iterations': max(1, original_iterations // 2), 'max_sources': max(1, state.max_sources // 2)})
                 collection_deadline = min(collection_deadline, started + (state.max_wall_seconds - final_seconds) / 2)
-            await self.researcher.run_async(state, emit, executor, started, collection_deadline)
+            quality_round_reserved = bool(getattr(self.llm, "supports_task_routing", False) and not self.review_checkpoint
+                                          and state.max_iterations > 1 and self.settings.additional_research_rounds > 0)
+            options = {'iteration_limit': state.max_iterations - 1} if quality_round_reserved else {}
+            audit(state, "call_allocation", "Planning, evidence extraction and final writing prioritized", final_calls=self.llm.reserved_final_calls, recovery_calls=getattr(self.llm, "recovery_reserve", 0), total_calls=self.llm.max_requests)
+            await self.researcher.run_async(state, emit, executor, started, collection_deadline, **options)
             if self.review_checkpoint:
                 from app.models import SubQuestion
                 pause_start = time.monotonic()
@@ -139,6 +146,9 @@ class ResearchAgent:
                 state.stop_decisions[-1].reason = "Collection time allocation exhausted; reserved final review and synthesis"
         else:
             self.researcher.record_timeout(state, started)
+        self.llm.recovery_reserve = 0
+        if getattr(self.llm, "supports_task_routing", False):
+            await self._quality_research(state, emit, executor, started, deadline)
         validate_evidence(state)
         emit("analysis_started", "Checking for conflicting information")
         emit("research_progress", "Checking conflicts", {"phase": "conflicts", "progress": 75})
@@ -174,7 +184,7 @@ class ResearchAgent:
             emit("conflict_detected", f"Conflict detected: {conflict.topic}", conflict)
         if getattr(self.llm, "supports_task_routing", False) and state.findings:
             reviewed_claims = set()
-            if state.mode != "quick":
+            if state.mode != "quick" and self.llm.max_requests - self.llm.requests_used > self.llm.reserved_final_calls:
                 try:
                     emit("verification_started", "Independently challenging claims against original evidence")
                     claims = [{"claim_id": claim.id, "claim": claim.claim,
@@ -205,7 +215,7 @@ class ResearchAgent:
             emit("verification_completed", "Evidence review complete", {"count": len(state.verifications)})
             state.conflicts = evidence_conflicts(state)
         coverage, remaining_gaps = coverage_gaps(state)
-        incomplete_stages = [gap for gap in state.unresolved_questions if gap == "Research ended before all analysis stages completed"]
+        incomplete_stages = [gap for gap in state.unresolved_questions if gap == "Research ended before all analysis stages completed" or gap.startswith("Quality check: ")]
         state.unresolved_questions = list(dict.fromkeys([reason for _, reason, _ in remaining_gaps] + incomplete_stages))
         if state.semantic_validation_required:
             state.gaps = state.unresolved_questions[:]
@@ -217,7 +227,11 @@ class ResearchAgent:
         emit("research_progress", "Writing final report", {"phase": "synthesis", "progress": 85})
         try:
             synthesis_state = state.model_copy(deep=True)
+            audit_offset = len(synthesis_state.audit_log)
             draft = await bounded_call(executor, deadline, self.synthesizer.draft, synthesis_state)
+            # Worker writes stay isolated; merge diagnostics only after successful completion.
+            for entry in synthesis_state.audit_log[audit_offset:]:
+                audit(state, entry.action, entry.message, **entry.details)
         except TimeoutError:
             self.researcher.record_timeout(state, started)
             draft = ReportDraft(title=f"Research Report: {state.question.question}", executive_summary="", conclusion="", limitations=state.gaps)
@@ -240,9 +254,75 @@ class ResearchAgent:
         state.llm_requests_used = self.llm.requests_used
         state.llm_usage = getattr(self.llm, "usage", {})
         state.status = "complete"
+        audit(state, "answer_coverage", "Final question-by-question evidence diagnosis", **research_diagnosis(state))
+        audit(state, "report_usefulness", "Structural checks; human review is required for substantive quality", **report_usefulness(state))
         audit(state, "quality_diagnostics", "Research quality measurements; counts are session diagnostics, not accuracy scores", **quality_diagnostics(state))
         emit("research_snapshot", "Research state finalized", state.model_dump(mode="json", exclude={"sources": {"__all__": {"content"}}}))
         emit("report_generated", "Final report generated", state.final_report)
         emit("research_progress", "Report ready", {"phase": "complete", "progress": 100})
         emit("research_completed", "Research completed", {"searches_used": state.searches_performed, "sources": len(state.sources), "llm_requests_used": state.llm_requests_used})
         return state
+
+    async def _quality_research(self, state, emit, executor, started, deadline):
+        """One model coverage check and at most one resumed collection iteration."""
+        reserve = getattr(self.llm, 'reserved_final_calls', 3)
+        calls_left = self.llm.max_requests - self.llm.requests_used
+        reasons = []
+        if getattr(self, 'review_checkpoint', None): reasons.append('user checkpoint controls follow-up collection')
+        if state.iteration >= state.max_iterations: reasons.append('iteration budget exhausted')
+        if state.searches_performed >= state.max_searches: reasons.append('search budget exhausted')
+        if len(state.sources) >= state.max_sources: reasons.append('source budget exhausted')
+        if calls_left < reserve + 3: reasons.append('insufficient calls for assessment, extraction, evidence review and final report')
+        if deadline - time.monotonic() < 15: reasons.append('insufficient time for recovery and final report')
+        if self.settings.additional_research_rounds <= 0: reasons.append('additional research rounds disabled')
+        if any(item.stop and item.reason == 'New-evidence gain plateau' for item in state.stop_decisions):
+            reasons.append('new evidence has plateaued')
+        if reasons:
+            audit(state, 'publication_quality', 'Additional evidence collection skipped', reasons=reasons)
+            return
+        emit('research_progress', 'Checking answer coverage before writing the report', {'phase': 'evidence', 'progress': 72})
+        try:
+            assessment = await bounded_call(executor, deadline - 10, invoke_structured, self.llm,
+                PREPUBLICATION_QUALITY + '\nQuestion: ' + state.question.question
+                + '\nChecklist and diagnosed gaps: ' + json.dumps(research_diagnosis(state), ensure_ascii=False)
+                + '\nCompleted queries: ' + json.dumps(state.searched_queries)
+                + '\nEvidence packets: ' + packet_context(state), GapAssessment, task=GAP_ANALYSIS)
+        except (TimeoutError, RuntimeError, ValueError):
+            audit(state, 'publication_quality', 'Coverage assessment unavailable; retain evidence-bounded report')
+            return
+        valid_ids = {task.id for task in state.plan.sub_question_tasks} if state.plan else set()
+        queries, seen = [], set(state.searched_queries)
+        for item in sorted(assessment.targeted_queries, key=lambda item: {'high': 0, 'medium': 1, 'low': 2}[item.priority])[:3]:
+            query = ' '.join(item.query.split())
+            ids = list(dict.fromkeys(item.sub_question_ids))
+            if (not query or len(query) > 500 or query.casefold() in seen or not ids
+                    or not set(ids) <= valid_ids or '://' in query):
+                continue
+            queries.append((query, 'Pre-publication evidence gap: ' + item.reason[:500], ids))
+            seen.add(query.casefold())
+        audit(state, 'publication_quality', 'Model assessed answer coverage; not a factual accuracy verdict',
+              proposed_queries=len(assessment.targeted_queries), accepted_queries=len(queries),
+              queries=[{'query': query, 'reason': reason, 'sub_question_ids': ids} for query, reason, ids in queries])
+        if not queries:
+            return
+        def retain_gaps(entries):
+            limitations = ['Quality check: additional evidence remains unresolved for ' + ', '.join(ids) + ': ' + reason for _, reason, ids in entries]
+            state.unresolved_questions = list(dict.fromkeys(state.unresolved_questions + limitations))
+            state.gaps = list(dict.fromkeys(state.gaps + limitations))
+        if self.llm.max_requests - self.llm.requests_used < reserve + 2 or deadline - time.monotonic() < 15:
+            audit(state, 'publication_quality', 'Recovery skipped after assessment to preserve final report capacity')
+            retain_gaps(queries)
+            return
+        before = len(state.evidence)
+        before_by_question = {row['id']: set(row['evidence_ids']) for row in answer_checklist(state)}
+        before_searches = state.searches_performed
+        emit('research_progress', 'Researching specific gaps identified by the quality check', {'phase': 'evidence', 'progress': 73})
+        await self.researcher.run_async(state, emit, executor, started, deadline - min(30, (deadline-time.monotonic()) * .3),
+                                        iteration_limit=1, resume_queries=queries)
+        after_by_question = {row['id']: set(row['evidence_ids']) for row in answer_checklist(state)}
+        gains = {qid: after_by_question.get(qid, set()) - before_by_question.get(qid, set()) for _, _, ids in queries for qid in ids}
+        retain_gaps([(query, reason, [qid for qid in ids if not gains[qid]]) for query, reason, ids in queries if any(not gains[qid] for qid in ids)])
+        audit(state, 'publication_recovery', 'One bounded quality-driven collection round completed',
+              searches=state.searches_performed-before_searches, new_excerpts=max(0, len(state.evidence)-before),
+              new_linked_excerpts=len(set().union(*gains.values())),
+              remaining_gaps=state.unresolved_questions)

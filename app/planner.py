@@ -32,6 +32,7 @@ class Planner:
     def create_plan(self, question: ResearchQuestion, previous_context: str = '') -> ResearchPlan:
         mode = MODES[question.mode]
         instructions = f"\nMode: {mode.label}. Strategy: {mode.strategy}\nCreate up to {mode.queries} distinct queries. Prefer source types: {', '.join(mode.preferred_types)}."
+        instructions += "\nTreat sub-questions as an answer checklist: cover each explicit part of the user question, avoid overlapping questions, and keep the scope feasible within the query limit. Do not replace the user question with a related topic. For comparisons include matched criteria; technical questions need mechanisms and constraints; academic reviews need study methods and limitations; fact checks need individual claims and counter-evidence.\n"
         instructions += "\nProvide sub_question_tasks with unique Q IDs, question, query, and depends_on Q IDs for genuine prerequisites only. Independent tasks have no dependencies."
         instructions += "\nWhen quantitative evidence is relevant, include a focused query for original datasets, measured results, adoption statistics or dated observations about this topic, within the existing query limit. For purely definitional questions do not force unrelated statistics. Never invent numbers while planning."
         if previous_context:
@@ -49,8 +50,12 @@ class Planner:
                 ResearchPlan,
                 task=PLANNING_TASK,
             )
-            plan.search_queries = list(dict.fromkeys(plan.search_queries))[:mode.queries]
+            plan.search_queries = list(dict.fromkeys(query.strip() for query in plan.search_queries if query.strip()))[:mode.queries]
+            if not plan.search_queries and not plan.sub_question_tasks:
+                plan.search_queries = [question.question]
             plan.sub_question_tasks = plan.sub_question_tasks[:mode.queries]
+            if plan.sub_question_tasks:
+                plan.sub_questions = [task.question for task in plan.sub_question_tasks]
             return plan
         except (RuntimeError, ValueError) as exc:
             logger.warning("Using deterministic fallback plan (%s)", type(exc).__name__)

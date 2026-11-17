@@ -40,3 +40,37 @@ test('version comparison distinguishes status changes from omitted claims', asyn
   assert.match(html,/do not prove a change in the world/);
   assert.match(html,/SYNTHETIC unknown cost/);
 });
+
+
+test('specific feedback reasons preserve the existing API fields and note limit', async () => {
+  const previousState = globalThis.feedbackTestState;
+  const previousSave = globalThis.feedbackTestSave;
+  let saved;
+  try {
+    let source = await readFile(new URL('../src/components/ReportFeedback.tsx', import.meta.url), 'utf8');
+    source = source.replace(/^import .*;\r?\n/gm, '');
+    source = 'const useState = globalThis.feedbackTestState; const saveProductivity = globalThis.feedbackTestSave;\n' + source;
+    const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, jsx: ts.JsxEmit.ReactJSX } }).outputText;
+    const module = { exports: {} };
+    const values = ['analysis', 'Missing information', 'Please explain the limitations.', 'Unclear explanation', '', false];
+    let index = 0;
+    globalThis.feedbackTestState = () => [values[index++], () => {}];
+    globalThis.feedbackTestSave = async (kind, item) => { saved = { kind, item }; };
+    new Function('require', 'module', 'exports', compiled)(createRequire(import.meta.url), module, module.exports);
+    const walk = node => Array.isArray(node) ? node.flatMap(walk) : node && typeof node === 'object' && node.props ? [node, ...walk(node.props.children)] : [];
+    const nodes = walk(module.exports.ReportFeedback({ researchId: 'synthetic-research', sections: [] }));
+    const textarea = nodes.find(node => node.type === 'textarea');
+    assert.equal(textarea.props.maxLength, 2000 - '[Unclear explanation] '.length);
+    assert.ok(nodes.some(node => node.type === 'option' && node.props.children === 'Missed my question'));
+    nodes.find(node => node.type === 'button').props.onClick();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(saved.kind, 'feedback');
+    assert.equal(saved.item.category, 'Missing information');
+    assert.equal(saved.item.researchId, 'synthetic-research');
+    assert.equal(saved.item.section, 'analysis');
+    assert.equal(saved.item.note, '[Unclear explanation] Please explain the limitations.');
+  } finally {
+    globalThis.feedbackTestState = previousState;
+    globalThis.feedbackTestSave = previousSave;
+  }
+});

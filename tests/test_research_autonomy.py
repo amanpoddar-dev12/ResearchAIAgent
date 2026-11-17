@@ -208,7 +208,7 @@ def test_expansion_only_targets_measured_gaps_and_logs_each_iteration(monkeypatc
         plan=ResearchPlan(objective="SYNTHETIC", search_queries=["Test widget evidence"]),
         budget_overrides=BudgetOverrides(max_searches=3, max_iterations=3))
     Researcher(SyntheticLLM(), "synthetic-not-a-key", 10, 10, 5).run(state)
-    assert len(calls) == 3 and calls[1] == "Test widget evidence primary source evidence"
+    assert len(calls) == 3 and calls[1] == "Test widget evidence full text original study methods"
     assert len(state.stop_decisions) == 3 and state.stop_decisions[-1].stop
     expansions = [entry for entry in state.audit_log if entry.action == "expansion"]
     assert expansions and all("no verified evidence" in entry.details["reason"] for entry in expansions)

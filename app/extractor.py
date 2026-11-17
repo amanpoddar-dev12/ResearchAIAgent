@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 class Extractor:
     def __init__(self, llm: LLMClient) -> None:
         self.llm = llm
+        self.failures = []
 
     def extract(self, question: str, source: Source) -> list[Finding]:
         prompt = CLAIM_EXTRACTION.format(question=question, source_id=source.id, content=select_passages(source.content, question, 30000))
@@ -49,19 +50,22 @@ class Extractor:
             return DataPointExtraction()
 
     def extract_evidence(self, question: str, sources: list[Source], strategy: str = "") -> ClaimExtraction:
+        self.failures = []
         if not sources:
             return ClaimExtraction()
         if getattr(self.llm, "supports_task_routing", False):
             merged = ClaimExtraction()
             # Bounded batches share context once; one failed batch cannot erase prior results.
-            for offset in range(0, len(sources), 3):
+            batch_calls = max(0, getattr(self.llm, "max_requests", 1000) - getattr(self.llm, "requests_used", 0) - getattr(self.llm, "reserved_final_calls", 0) - getattr(self.llm, "recovery_reserve", 0) - 1)
+            for offset in range(0, min(len(sources), batch_calls * 3), 3):
                 batch = sources[offset:offset + 3]
                 text = "\n\n".join(f"--- {source.id} | {source.title} ---\nSub-questions: {source.sub_question_ids}\n{select_passages(source.content, question + " " + strategy, 10000)}" for source in batch)
                 try:
                     result = invoke_structured(self.llm, BATCH_CLAIM_EXTRACTION.format(question=question, sources=text) + strategy,
                                                ClaimExtraction, task=EVIDENCE_EXTRACTION)
-                except (RuntimeError, ValueError, TypeError, TimeoutError):
-                    logger.warning("Extraction unavailable for batch %s", offset // 3)
+                except (RuntimeError, ValueError, TypeError, TimeoutError) as exc:
+                    logger.warning("Extraction unavailable for batch %s (%s)", offset // 3, type(exc).__name__)
+                    self.failures.append({"source_ids": [source.id for source in batch], "error": type(exc).__name__, "provider": getattr(exc, "provider", None), "status": getattr(exc, "status_code", None), "reason": getattr(exc, "reason", type(exc).__name__)})
                     continue
                 prefix = f"batch{offset}:"
                 claim_ids = {claim.id for claim in result.findings}
@@ -75,6 +79,8 @@ class Extractor:
                 merged.evidence.extend(result.evidence)
                 merged.data_points.extend(result.data_points)
                 merged.processed_source_ids.extend(source.id for source in batch)
+            if batch_calls * 3 < len(sources):
+                self.failures.append({"source_ids": [source.id for source in sources[batch_calls * 3:]], "error": "Call capacity reserved for evidence review and report writing"})
             return merged
         source_text = "\n\n".join(
             f"--- {source.id} | {source.title} | {source.url} ---\nRetrieved for sub-questions: {source.sub_question_ids}\n{select_passages(source.content, question + " " + strategy, 5000)}"

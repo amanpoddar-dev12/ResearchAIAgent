@@ -15,7 +15,7 @@ from app.chat import ChatRequest, ChatResponse
 from app.llm.router import LLMRouter
 from app.modes import MODES
 from app.rag import SessionIndex
-from app.assistant_context import AssistantContext, AssistantRequest, HybridAnswer, build_context, restore_saved_state
+from app.assistant_context import AssistantContext, AssistantRequest, HybridAnswer, build_context, restore_saved_state, review_hybrid_answer
 from app.assistant_prompts import HYBRID_ASSISTANT, PDF_ASSISTANT
 from app.llm.base import ModelConfigurationError, ProviderResponseError
 from app.llm.routing import CHAT_RESPONSE
@@ -361,7 +361,7 @@ async def _hybrid_events(job: ResearchJob, request: ChatRequest) -> AsyncIterato
     settings = Settings()
     if not settings.gemini_api_key or not settings.gemini_model:
         raise ModelConfigurationError("Gemini configuration is incomplete")
-    router = LLMRouter(settings, max_requests=1)
+    router = LLMRouter(settings, max_requests=2)
     router.deadline = time.monotonic() + (settings.llm_timeout_seconds or 60)
     provider = router.providers["gemini"]
     headers = {"Content-Type": "application/json", "x-goog-api-key": provider.api_key}
@@ -418,6 +418,8 @@ async def _hybrid_events(job: ResearchJob, request: ChatRequest) -> AsyncIterato
                     data = json.loads("\n".join(lines))
                     if data.get("error") or data.get("promptFeedback", {}).get("blockReason"):
                         raise ProviderResponseError("gemini", CHAT_RESPONSE, "assistant response unavailable")
+                    if any(candidate.get('finishReason') == 'MAX_TOKENS' for candidate in data.get('candidates', [])[:1]):
+                        raise ProviderResponseError('gemini', CHAT_RESPONSE, 'assistant output token limit reached')
                     provider.record_usage(CHAT_RESPONSE, data.get("usageMetadata"))
                     return "".join(part.get("text", "") for candidate in data.get("candidates", [])[:1]
                         for part in candidate.get("content", {}).get("parts", []) if not part.get("thought"))
@@ -428,16 +430,22 @@ async def _hybrid_events(job: ResearchJob, request: ChatRequest) -> AsyncIterato
                     elif not line and frame:
                         delta = answer.feed(parse_frame(frame))
                         frame = []
-                        if delta:
+                        if delta and answer.tag == "General knowledge":
                             yield "chat_delta", {"text": delta, "citations": list(answer.references.values())}
                 if frame:
                     delta = answer.feed(parse_frame(frame))
-                    if delta:
+                    if delta and answer.tag == "General knowledge":
                         yield "chat_delta", {"text": delta, "citations": list(answer.references.values())}
                 delta = answer.feed("", final=True)
-                if delta:
+                if delta and answer.tag == "General knowledge":
                     yield "chat_delta", {"text": delta, "citations": list(answer.references.values())}
-        yield "chat_complete", answer.response()
+        result = answer.response()
+        if result.intent != 'General knowledge':
+            result = await review_hybrid_answer(router, context, request.message, result)
+            # Keep the existing SSE contract; publish reviewed text in small increments.
+            for start in range(0, len(result.answer), 48):
+                yield 'chat_delta', {'text':result.answer[start:start+48], 'citations': result.citations}
+        yield "chat_complete", result
 
 
 async def chat_research(research_id: str, request: AssistantRequest | ChatRequest) -> ChatResponse:

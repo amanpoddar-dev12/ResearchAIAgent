@@ -76,7 +76,7 @@ class SessionIndex:
             text = "\n".join(filter(None, [self.source_text.get(source["id"], source.get("content", "")), source.get("discovery_snippet", ""), source.get("summary", "")]))
             add("source", source["id"], text, source["id"])
         for claim in claims.values():
-            add("claim", claim["id"], f'{claim["claim"]}\n{claim.get("explanation", "")}\nEvidence status: {claim.get("evidence_status", "Unverified")}\nCitation validity score: {claim.get("score_citation_validity", 0)}',
+            add("claim", claim["id"], f'{claim["claim"]}\nAI explanation (not independently validated): {claim.get("explanation", "")}\nEvidence status: {claim.get("evidence_status", "Unverified")}\nCitation validity score: {claim.get("score_citation_validity", 0)}',
                 next(iter(claim.get("source_ids", [])), None), claim["id"])
         for item in state.get("evidence", []):
             add("evidence", item["id"], item["excerpt"], item["source_id"], item.get("claim_id"), item["id"])

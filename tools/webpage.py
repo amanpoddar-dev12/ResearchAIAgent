@@ -66,6 +66,7 @@ def fetch_webpage(url: str, timeout: float = 15.0, max_chars: int = 30_000, *, m
                 response.raise_for_status()
                 content_type = response.headers.get("content-type", "")
                 if not any(kind in content_type for kind in ("text/html", "text/plain", "application/xhtml+xml", "application/pdf")):
+                    if metadata is not None: metadata["failure"] = "unsupported content type"
                     return ""
                 pdf = "application/pdf" in content_type
                 limit = min(MAX_UPLOAD_BYTES, 8 * 1024 * 1024) if pdf else max_chars * 4
@@ -125,4 +126,7 @@ def fetch_webpage(url: str, timeout: float = 15.0, max_chars: int = 30_000, *, m
         raise ValueError("Too many redirects")
     except (httpx.HTTPError, OSError, ValueError, UnicodeError) as exc:
         logger.warning("Could not fetch webpage (%s)", type(exc).__name__)
+        if metadata is not None:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            metadata["failure"] = f"HTTP {status}" if status else type(exc).__name__
         return ""

@@ -84,7 +84,7 @@ def test_real_router_pipeline_schemas_budgets_and_reports(monkeypatch, mode):
     assert state.findings[0].evidence_status == "Supported"
     assert state.extraction_completed == ["S1"]
     assert tasks.count("evidence_extraction") == 1
-    assert tasks.count('data_extraction') == 1
+    assert tasks.count('data_extraction') == 0  # Evidence extraction already returned the numerical observations.
     assert 0 < state.llm_requests_used <= 10
     assert sum(item["attempts"] for item in state.llm_usage.values()) == state.llm_requests_used
     assert [section.id for section in state.structured_report.sections] == [key for key, _ in SECTION_TITLES]

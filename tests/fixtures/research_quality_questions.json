@@ -1,0 +1,70 @@
+{
+  "purpose": "Manual evaluation prompts, not ground-truth answers. Results depend on research date and sources.",
+  "cases": [
+    {
+      "id": "technical",
+      "mode": "technical",
+      "question": "Compare cache invalidation strategies for a read-heavy web application. Explain consistency trade-offs and implementation constraints.",
+      "review_for": [
+        "Mechanism explanations",
+        "Workload assumptions",
+        "Evidence-backed trade-offs",
+        "No invented benchmark numbers"
+      ]
+    },
+    {
+      "id": "scientific",
+      "mode": "academic",
+      "question": "What evidence supports the effects of microplastics on human health, and what remains uncertain?",
+      "review_for": [
+        "Human versus laboratory evidence",
+        "Study methods and populations",
+        "Causation versus association",
+        "Uncertainty preserved"
+      ]
+    },
+    {
+      "id": "historical",
+      "mode": "deep",
+      "question": "What factors contributed to the decline of the Indus Valley Civilization, and where do explanations remain disputed?",
+      "review_for": [
+        "Multiple explanations",
+        "Dating and source limitations",
+        "Disagreement without invented resolution"
+      ]
+    },
+    {
+      "id": "conflicting",
+      "mode": "fact_check",
+      "question": "Does a four-day workweek improve productivity across all industries?",
+      "review_for": [
+        "Claim scope",
+        "Original studies",
+        "Selection and measurement limitations",
+        "No universal conclusion from selected trials"
+      ]
+    },
+    {
+      "id": "comparison",
+      "mode": "compare",
+      "question": "Compare sodium-ion and lithium-ion batteries for stationary energy storage using matched criteria.",
+      "review_for": [
+        "Cost and performance measurement conditions",
+        "Matched units and dates",
+        "Missing cells retained",
+        "No unsupported winner"
+      ]
+    },
+    {
+      "id": "unanswerable",
+      "mode": "deep",
+      "question": "What was the exact worldwide number of unreported software vulnerabilities discovered privately yesterday?",
+      "review_for": [
+        "Unavailable or unknowable total explained",
+        "No fabricated statistic",
+        "Useful explanation of measurement limits",
+        "No false claim of exhaustive search"
+      ]
+    }
+  ]
+}

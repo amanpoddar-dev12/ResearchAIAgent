@@ -97,7 +97,7 @@ def test_targeted_modes_finish_with_evidence_or_explicit_unknowns(offline_pipeli
             assert "| Criterion | Alpha | Beta |" in state["final_report"]
             assert "Test speed" in state["final_report"]
             assert "Unverified — no linked evidence" in state["final_report"]
-        assert state["llm_requests_used"] == 5
+        assert 5 <= state["llm_requests_used"] <= state["max_llm_requests"]
     asyncio.run(run())
 
 

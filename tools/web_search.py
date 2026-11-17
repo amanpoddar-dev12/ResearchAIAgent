@@ -8,6 +8,10 @@ from app.models import SearchResult, SourceFilters
 logger = logging.getLogger(__name__)
 
 
+class SearchUnavailable(RuntimeError):
+    """A failed provider request, distinct from a valid empty result."""
+
+
 def normalize_url(url: str) -> str:
     parts = urlsplit(url.strip())
     if parts.scheme not in {"http", "https"} or not parts.netloc:
@@ -32,7 +36,8 @@ def search_web(api_key: str, query: str, max_results: int = 5, timeout: float = 
         items = response.json().get("results", [])
     except (httpx.HTTPError, ValueError, TypeError) as exc:
         logger.warning("Tavily search failed (%s)", type(exc).__name__)
-        return []
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        raise SearchUnavailable(f"Search provider unavailable ({status or type(exc).__name__})") from None
     results: list[SearchResult] = []
     seen: set[str] = set()
     for item in items:

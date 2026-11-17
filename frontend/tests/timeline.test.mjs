@@ -19,3 +19,9 @@ test('timeline distinguishes pending, running, completed and failed stages', () 
   assert.match(render('error', ['search_started', 'research_failed']), />failed</);
   assert.equal((render('completed', ['research_completed']).match(/>done</g) || []).length, 4);
 });
+
+
+test('completed processing gaps remain visible rather than implying full verification', () => {
+  assert.match(render('completed', ['search_started', 'gap_detected', 'report_generated']), /Completed with limits/);
+  assert.doesNotMatch(render('completed', ['report_generated']), /Completed with limits/);
+});

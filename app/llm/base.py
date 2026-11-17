@@ -27,6 +27,7 @@ class ProviderError(LLMError):
         self.provider = provider
         self.task = task
         self.status_code = status_code
+        self.reason = message
         suffix = f" (HTTP {status_code})" if status_code is not None else ""
         super().__init__(f"{provider} provider failed for {task}: {message}{suffix}")
 

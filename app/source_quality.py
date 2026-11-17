@@ -93,6 +93,9 @@ def score_source(source: Source, question: str, mode: ModeConfig, *, today: date
     terms = set(re.findall(r"\w+", question.lower())) - stop
     content_terms = set(re.findall(r"\w+", (source.title + " " + source.content).lower()))
     relevance = len(terms & content_terms) / len(terms) if terms else 0.0
+    if source._discovery_relevance is not None:
+        # Discovery can rescue lexical synonyms, but never sets evidence status or truth.
+        relevance = max(relevance, .4 * max(0, min(1, source._discovery_relevance)))
     host = (urlsplit(source.url).hostname or "").lower()
     authority = .85 if host.endswith((".gov", ".edu")) else .65 if source.source_type in {"academic", "documentation", "primary"} else .35
     published = publication_date(source.publication_date)
@@ -108,6 +111,8 @@ def score_source(source: Source, question: str, mode: ModeConfig, *, today: date
         source_type=1.0 if source.source_type in mode.preferred_types else .3,
         evidence_strength=round(evidence_strength, 4))
     notes = ["Heuristic estimates: lexical relevance, domain/type authority proxy, five-year freshness decay, mode preference, and reporting signals (methods, limitations, results, original text). Signals do not establish study validity.", "Source type inferred from URL/title metadata; not independently verified."]
+    if source._discovery_relevance is not None:
+        notes.append("Relevance also includes a bounded discovery-provider signal; this does not verify the source or its claims.")
     if age is None or age < 0:
         notes.append("Publication date missing, invalid or in the future; freshness scored zero.")
     return SourceQuality(**scores, total=round(sum(scores[key] * weight for key, weight in mode.weights.model_dump().items()), 4), notes=notes)

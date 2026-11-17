@@ -74,7 +74,7 @@ class LLMRouter(LLMClient):
         if response_model is not None:
             messages = [*messages, {"role": "user", "content": "Return only JSON conforming exactly to this schema:\n" + json.dumps(response_model.model_json_schema())}]
         if max_tokens is None:
-            max_tokens = 8000 if task == "final_synthesis" else 5000 if task in {"evidence_extraction", "source_extraction"} else 3000
+            max_tokens = 8000 if task == "final_synthesis" else 5000 if task in {"evidence_extraction", "source_extraction", "final_review"} else 3000
         await self._reserve_request(task)
         text = await provider.complete(messages, task=task, temperature=temperature, max_tokens=max_tokens)
         if response_model is None:
@@ -100,6 +100,8 @@ class LLMRouter(LLMClient):
             if self.remaining_time() <= 0:
                 raise LLMRequestBudgetExceeded("Session wall-clock budget exhausted")
             reserve = 0 if task in {"final_synthesis", "final_review"} else min(2, self.reserved_final_calls) if task in {"evidence_evaluation", "independent_review"} else self.reserved_final_calls
+            if task not in {"final_synthesis", "final_review"}:
+                reserve += getattr(self, "recovery_reserve", 0)
             if self._requests_used >= self._max_requests - reserve:
                 raise LLMRequestBudgetExceeded("LLM request budget reached; continuing with collected evidence.")
             self._requests_used += 1

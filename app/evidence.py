@@ -132,7 +132,7 @@ def validate_evidence(state: ResearchState) -> None:
         finding.evidence_status = evidence_status(assessed)
         retrieved_questions = list(dict.fromkeys(qid for item in linked for qid in sources[item.source_id].sub_question_ids))
         finding.sub_question_ids = [qid for qid in finding.sub_question_ids if qid in retrieved_questions] if state.explicit_sub_question_links else retrieved_questions
-        if state.provenance_required:
+        if state.provenance_required and not finding.explanation.strip():
             finding.explanation = "Validated excerpt(s): " + ", ".join(item.id for item in linked) if linked else "No traceable supporting evidence was retrieved."
         if not linked:
             reject(state, finding.id, "Claim has no traceable evidence; retained as Unverified")
