@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     max_searches: int = Field(default=10, ge=1)
     max_sources: int = Field(default=15, ge=1)
     max_iterations: int = Field(default=5, ge=1)
-    max_llm_requests: int = Field(default=10, ge=1)
+    max_llm_requests: int = Field(default=24, ge=1)
     max_parallel_tasks: int = Field(default=3, ge=1, le=8)
     max_wall_seconds: float = Field(default=180, gt=0, le=3600)
     llm_timeout_seconds: float | None = Field(default=None, gt=0)

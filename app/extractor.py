@@ -59,7 +59,7 @@ class Extractor:
             batch_calls = max(0, getattr(self.llm, "max_requests", 1000) - getattr(self.llm, "requests_used", 0) - getattr(self.llm, "reserved_final_calls", 0) - getattr(self.llm, "recovery_reserve", 0) - 1)
             for offset in range(0, min(len(sources), batch_calls * 3), 3):
                 batch = sources[offset:offset + 3]
-                text = "\n\n".join(f"--- {source.id} | {source.title} ---\nSub-questions: {source.sub_question_ids}\n{select_passages(source.content, question + " " + strategy, 10000)}" for source in batch)
+                text = "\n\n".join(f"--- {source.id} | {source.title} ---\nSub-questions: {source.sub_question_ids}\n{select_passages(source.content, question + " " + strategy, 5000)}" for source in batch)
                 try:
                     result = invoke_structured(self.llm, BATCH_CLAIM_EXTRACTION.format(question=question, sources=text) + strategy,
                                                ClaimExtraction, task=EVIDENCE_EXTRACTION)

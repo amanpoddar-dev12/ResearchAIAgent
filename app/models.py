@@ -363,7 +363,7 @@ class ResearchState(BaseModel):
     final_report: str | None = None
     structured_report: StructuredReport | None = None
     llm_requests_used: int = 0
-    max_llm_requests: int = 10
+    max_llm_requests: int = 24
     max_searches: int = 10
     max_sources: int = 15
     max_iterations: int = 5

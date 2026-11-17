@@ -203,7 +203,7 @@ class Researcher:
                             emit("search_completed", "Search could not complete", {"query": query, "count": 0})
                             continue
                         count, candidates, filtered = result
-                        audit(state, "collection_result", "Discovery and document collection completed", query=query, sub_question_ids=qids, discovered=count, retained_candidates=len(candidates), filtered=len(filtered))
+                        audit(state, "collection_result", "Discovery and document collection completed", provider="tavily", query=query, sub_question_ids=qids, discovered=count, retained_candidates=len(candidates), filtered=len(filtered))
                         state.searched_sub_questions = list(dict.fromkeys(state.searched_sub_questions + qids))
                         emit("search_completed", f"Found {count} search results", {"query": query, "count": count})
                         for item in filtered:

@@ -178,6 +178,15 @@ def _normal_text(text: str) -> str:
     return " ".join(re.sub(r"[*_`\"“”]", "", text).casefold().split()).strip(" .!?;:—–-'")
 
 
+def _is_absence_claim(text: str) -> bool:
+    normalized = _normal_text(text)
+    return bool(re.search(
+        r"\b(?:provided|available|retrieved|these|the)\s+sources?\b.*\b"
+        r"(?:do not|does not|don't|doesn't|not specify|no source|no evidence)\b",
+        normalized,
+    ))
+
+
 def _report_prose(text: str, state: ResearchState, evidence, numbers: dict[str, str]) -> str:
     """Citations alone do not prove a new assertion: retain traceable sentences only."""
     if not text.strip():
@@ -427,9 +436,14 @@ def _report_visuals(draft: ReportDraft, state: ResearchState, evidence):
 def build_structured_report(draft: ReportDraft, state: ResearchState) -> StructuredReport:
     evidence = _report_evidence(state)
     cited_ids = {item.source_id for item in evidence.values()}
-    numbers = {source.id: str(index) for index, source in enumerate(state.sources, 1) if source.id in cited_ids}
-    sources = {source.id: source for source in state.sources if source.id in numbers}
-    findings = [finding for finding in state.findings if any(key in evidence for key in finding.evidence_ids)]
+    report_source_ids = cited_ids or {source.id for source in state.sources}
+    numbers = {source.id: str(index) for index, source in enumerate(state.sources, 1) if source.id in report_source_ids}
+    sources = {source.id: source for source in state.sources if source.id in report_source_ids}
+    findings = [
+        finding for finding in state.findings
+        if any(key in evidence for key in finding.evidence_ids)
+        and not _is_absence_claim(finding.claim)
+    ]
     supported = [finding for finding in findings if finding.evidence_status in {"Supported", "Partially Supported"}]
     charts, tables = _report_visuals(draft, state, evidence)
     def refs(ids):
@@ -450,14 +464,50 @@ def build_structured_report(draft: ReportDraft, state: ResearchState) -> Structu
     ranked = sorted(supported, key=lambda finding: (finding.evidence_status != 'Supported', -{'critical': 3, 'high': 2, 'medium': 1, 'low': 0}[finding.importance]))
     verified_points = [f"- {claim_text(finding)} **{evidence_label(finding)[0]}:** {evidence_label(finding)[1]}" for finding in ranked[:5]]
     direct = [finding for finding in supported if finding.evidence_status == "Supported"]
-    answer = claim_text(next(finding for finding in ranked if finding.evidence_status == 'Supported')) if direct else "The available evidence does not establish a supported answer to the research question."
-    summary = answer + "\n\n### Key findings\n\n" + ("\n".join(verified_points) or "No traceable supporting findings were established. The research question remains Unverified.")
+    answer = claim_text(next(finding for finding in ranked if finding.evidence_status == 'Supported')) if direct else (
+        "**Retrieved result (not independently verified):** " + claim_text(findings[0])
+        if findings else
+        "The available evidence does not establish a supported answer to the research question."
+    )
+    fallback_points = [
+        f"- **Retrieved result ({finding.evidence_status}; verification incomplete):** "
+        f"{claim_text(finding)}"
+        for finding in findings[:5]
+    ]
+    evidence_completeness = "complete" if state.completion_quality == "complete" and any(
+        finding.evidence_status == "Supported" for finding in findings
+    ) else "incomplete"
+    summary = f"**Evidence completeness:** {evidence_completeness.capitalize()} for this session.\n\n" + answer + "\n\n### Key findings\n\n" + (
+        "\n".join(verified_points or fallback_points)
+        or "No traceable findings were established in this session."
+    )
+    if not direct:
+        retrieved_points = []
+        for finding in findings[:5]:
+            links = [evidence[key] for key in finding.evidence_ids if key in evidence]
+            if not links:
+                continue
+            retrieved_points.append(
+                f"- **Retrieved but not independently verified ({finding.evidence_status}):** "
+                f"{safe_label(finding.claim)} {refs(item.source_id for item in links)}"
+            )
+        if retrieved_points:
+            summary += "\n\n### Retrieved information requiring verification\n\n" + "\n".join(retrieved_points)
+        else:
+            excerpts = [
+                f"- **{safe_label(source.title)}:** {safe_label(source.discovery_snippet or source.content[:500])} {refs([source.id])}"
+                for source in sources.values()
+                if source.discovery_snippet or source.content
+            ]
+            if excerpts:
+                summary += "\n\n### Retrieved source material\n\n" + "\n".join(excerpts[:5])
     unknown = list(dict.fromkeys(state.unresolved_questions + state.gaps))
     if unknown:
         summary += "\n\n### What remains unknown\n\n" + "\n".join(f"- {safe_label(item)}" for item in unknown[:5])
     summary += "\n\nEvidence is limited to this session's retrieved sources; unresolved claims are not established conclusions."
+    traceable_source_count = len(cited_ids)
     abstract = (f"This report examines the question: {safe_label(state.question.question)}. It presents an evidence-bounded synthesis of the current research session, "
-        f"drawing on {len(sources)} source(s) with traceable excerpts and {len(findings)} linked claim record(s). Findings are distinguished by their support status, and unresolved questions are retained explicitly.")
+        f"drawing on {len(sources)} retrieved source(s), including {traceable_source_count} with traceable excerpts, and {len(findings)} linked claim record(s). Findings are distinguished by their support status, and unresolved questions are retained explicitly.")
     if supported:
         abstract += "\n\n" + " ".join(claim_text(finding) for finding in supported[:3])
     abstract = answer + "\n\n" + abstract
@@ -469,7 +519,7 @@ def build_structured_report(draft: ReportDraft, state: ResearchState) -> Structu
     mode = MODES[state.mode]
     methodology = (f"Mode: {mode.label}. {mode.strategy}\n\n"
         f"Filters applied: {json.dumps(state.filters.model_dump(mode='json'), ensure_ascii=False)}\n\n"
-        f"Source count: {len(state.sources)} retained; {len(state.filtered_sources)} excluded; {len(sources)} with traceable evidence. "
+        f"Source count: {len(state.sources)} retained; {len(state.filtered_sources)} excluded; {len(cited_ids)} with traceable evidence. "
         f"The session performed {state.searches_performed} search(es) across {state.iteration} iteration(s).\n\n"
         f"Budgets: {state.max_searches} searches; {state.max_sources} sources; {state.max_iterations} iterations; {state.max_parallel_tasks} parallel tasks; {state.max_wall_seconds:g} seconds.\n\n"
         "Source quality was assessed using relevance, authority, freshness, source type and evidence strength. "
@@ -492,7 +542,12 @@ def build_structured_report(draft: ReportDraft, state: ResearchState) -> Structu
     for source in sources.values():
         related = [finding for finding in supported if any(evidence[key].source_id == source.id for key in finding.evidence_ids if key in evidence)]
         background += f"\n\n### {safe_label(source.title)}\n\n"
-        background += " ".join(claim_text(finding) for finding in related) if related else "> " + next(item.excerpt for item in evidence.values() if item.source_id == source.id) + " " + refs([source.id])
+        if related:
+            background += " ".join(claim_text(finding) for finding in related)
+        else:
+            excerpt = next((item.excerpt for item in evidence.values() if item.source_id == source.id), None)
+            excerpt = excerpt or source.discovery_snippet or source.content[:500]
+            background += "> " + safe_label(excerpt) + " " + refs([source.id])
         background += f"\n\nSource metadata: {source.source_type or 'unspecified type'}; publication date {source.publication_date or 'not reported'}. {refs([source.id])} This metadata describes the retrieved record and does not establish the quality of its study design."
     analysis = []
     for finding in findings:
@@ -511,7 +566,29 @@ def build_structured_report(draft: ReportDraft, state: ResearchState) -> Structu
         if finding.depends_on:
             paragraph += " The claim depends on " + ", ".join(finding.depends_on) + "; its status is conditional on those prerequisite assessments."
         analysis.append(paragraph)
-    detailed = "\n\n".join(analysis) or "No claim had a traceable evidence chain. A substantive analysis cannot be supported by the current session."
+    if analysis:
+        detailed = "\n\n".join(analysis)
+    else:
+        retrieved = []
+        for source in sources.values():
+            excerpt = source.discovery_snippet or source.content[:1200]
+            if not excerpt:
+                continue
+            retrieved.append(
+                f"### Retrieved source record: {safe_label(source.title)}\n\n"
+                f"**Retrieval status:** {source.retrieval_method or 'discovery'}; "
+                f"**Evidence status:** no validated claim/evidence chain was produced.\n\n"
+                f"> {safe_label(excerpt)} {refs([source.id])}\n\n"
+                "This is retrieved source material, not an independently validated conclusion. "
+                "The source must be reviewed directly before using its statements as the answer."
+            )
+        detailed = (
+            "No claim had a traceable evidence chain. The following retrieved source records "
+            "are retained so the report remains useful while evidence validation is incomplete.\n\n"
+            + "\n\n".join(retrieved)
+            if retrieved else
+            "No claim had a traceable evidence chain, and no readable source material was retained."
+        )
     timeline = ("The accompanying timeline reports only dated quantitative observations explicitly present in the retrieved excerpts. Years and values are retained together; omitted years denote missing evidence, not zero values or continuity."
         if any(chart.section_id == "timeline" and chart.origin == "retrieved" for chart in charts)
         else "The retrieved evidence did not provide a validated series of dated quantitative observations. A year-by-year trend cannot be established. Publication dates alone are not treated as progress measurements; no missing years or values have been invented.")
@@ -569,7 +646,8 @@ def build_structured_report(draft: ReportDraft, state: ResearchState) -> Structu
         conclusion += " No supported substantive conclusion is available; the research question remains Unverified."
     conclusion += "\n\nFuture work should address the documented unresolved questions, seek independent primary evidence for singly supported claims, and compare explicitly matched definitions and measurement conditions before extending these conclusions. This is a research agenda, not a prediction."
     visual_sources = {sid for visual in [*charts, *tables] for sid in visual.source_ids}
-    reference_sources = [source for source in state.sources if source.id in cited_ids | visual_sources]
+    reference_ids = cited_ids | visual_sources or set(sources)
+    reference_sources = [source for source in state.sources if source.id in reference_ids]
     all_numbers = {source.id: str(index) for index, source in enumerate(state.sources, 1)}
     references = "\n\n".join(f"[{all_numbers[source.id]}] {source.title} — [{source.url}]({source.url})" for source in reference_sources) or "No traceable source references are available."
     full_count = sum(source.retrieval_method == 'fetch' for source in sources.values())

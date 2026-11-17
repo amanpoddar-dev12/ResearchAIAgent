@@ -1,6 +1,7 @@
 """Synthetic evidence fixtures for report clarity; no live model calls."""
 from app.models import Evidence, Finding, ReportBlock, ReportDraft
 from app.synthesizer import build_structured_report
+from main import _console_text
 from tests.test_evidence_pipeline import state_with_source
 
 
@@ -36,8 +37,12 @@ def test_evidence_strength_distinguishes_corroboration_and_disagreement():
     assert "**Well supported:**" in corroborated["executive-summary"]
     _, disputed = report_fixture(contradicts=True)
     assert "**Disputed:**" in disputed["executive-summary"]
-    assert disputed["executive-summary"].startswith("The available evidence does not establish")
+    assert disputed["executive-summary"].startswith("**Evidence completeness:**")
     assert "**Limited evidence:**" in report_fixture(second_source=True, shared_study=True)[1]['executive-summary']
+
+
+def test_console_text_handles_unicode_on_legacy_windows_stream():
+    assert _console_text("Japan�s population") == "Japan�s population"
 
 
 def test_freshness_unknowns_and_next_questions_remain_explicit():

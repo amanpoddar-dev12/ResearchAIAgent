@@ -48,6 +48,15 @@ the application derives it. In Fact Check mode use the exact supplied target cla
 text, including when the evidence contradicts it. In Compare mode set comparison_item
 to an exact supplied item and comparison_criterion to a shared criterion.
 Keep claims atomic and preserve population, timeframe, units, uncertainty, and negation.
+Every factual detail in a finding must be stated in its linked verbatim evidence excerpt.
+Do not create a claim merely because a source does not mention something. Absence from
+the retrieved material is not evidence that the fact is absent; record that limitation
+in the research gaps instead. Do not write claims such as "the provided sources do not
+specify..." or "no source reports..." unless the source explicitly makes that statement.
+Do not add a date from a page title, a source name from URL metadata, or an implied
+measurement period unless that detail also appears in the excerpt. If an excerpt
+contains only a number or metric, keep the finding limited to that number or metric;
+do not expand it into a dated or attributed claim.
 For each addressed sub-question, extract documented methods, sample/population, reported limitations and counter-evidence as separate evidence-linked claims when relevant. Do not infer study quality from a domain or missing metadata.
 Prefer exact source wording for observational claims. Supporting and refuting passages
 are equally important; a citation alone does not establish support. Use unique IDs
@@ -100,8 +109,9 @@ Classify each evidence item as supporting, contradicting, contextual, or unrelat
 Return JSON matching the requested schema. Do not provide hidden reasoning traces.
 Return assessments for each (claim_id, evidence_id) pair, with relation supports,
 contradicts, or context; strength direct or partial; and a concise reasoning summary.
-Check exact numbers, units, population, date, negation and causal scope. A real quote
-on the same topic can still be unrelated. Use context for unrelated/insufficient evidence.
+Check exact numbers, units, population, date, attribution, negation and causal scope.
+If any material claim detail is absent from the quote, use context rather than supports.
+A real quote on the same topic can still be unrelated. Use context for unrelated/insufficient evidence.
 Claims and evidence: {claims}
 """
 

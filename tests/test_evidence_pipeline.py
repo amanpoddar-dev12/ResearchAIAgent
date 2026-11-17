@@ -52,6 +52,50 @@ def test_claim_without_valid_evidence_is_retained_as_unverified():
     assert state.findings[0].evidence_ids == []
 
 
+def test_report_surfaces_retrieved_unverified_finding_without_absence_claim():
+    state = state_with_source("The total population was 123,802 thousand on October 1, 2024.")
+    state.evidence = [Evidence(
+        id="E1", source_id="S1",
+        excerpt="The total population was 123,802 thousand on October 1, 2024.",
+        relation="context", strength="partial",
+    )]
+    state.findings = [
+        Finding(id="C1", claim="The total population was 123,802 thousand on October 1, 2024.",
+                source_ids=["S1"], evidence_ids=["E1"], category="statistic",
+                explanation="", confidence=0),
+        Finding(id="C2", claim="The provided sources do not specify the total population.",
+                source_ids=["S1"], evidence_ids=["E1"], category="analysis",
+                explanation="", confidence=0),
+    ]
+    validate_evidence(state)
+    report = build_structured_report(ReportDraft(title="Report", executive_summary="", conclusion=""), state)
+    summary = next(section.content for section in report.sections if section.id == "executive-summary")
+    assert "Retrieved result (not independently verified)" in summary
+    assert "The provided sources do not specify" not in summary
+
+
+def test_report_shows_retrieved_sources_when_extraction_has_no_evidence():
+    state = state_with_source("The total population was 123,802 thousand on October 1, 2024.")
+    state.sources[0].discovery_snippet = "The total population was 123,802 thousand on October 1, 2024."
+    report = build_structured_report(ReportDraft(title="Report", executive_summary="", conclusion=""), state)
+    summary = next(section.content for section in report.sections if section.id == "executive-summary")
+    assert "Retrieved source material" in summary
+    assert "123,802 thousand" in summary
+
+
+def test_incomplete_report_keeps_all_sections_and_references():
+    state = state_with_source("The total population was 123,802 thousand on October 1, 2024.")
+    state.sources[0].discovery_snippet = "The total population was 123,802 thousand on October 1, 2024."
+    report = build_structured_report(ReportDraft(title="Report", executive_summary="", conclusion=""), state)
+    sections = {section.id: section.content for section in report.sections}
+    expected = {"abstract", "executive-summary", "introduction", "methodology", "background",
+                "analysis", "timeline", "comparison", "discussion", "conclusion", "references"}
+    assert set(sections) == expected
+    assert all(content.strip() for content in sections.values())
+    assert "123,802 thousand" in sections["analysis"]
+    assert "Retrieved" in sections["references"]
+
+
 def test_conflict_is_present_in_final_report():
     state = state_with_source()
     state.conflicts = [Conflict(
